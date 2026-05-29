@@ -138,4 +138,4 @@ python -m src.cli export -p 项目ID -f md
 
 ## 开源协议
 
-[MIT License](LICENSE)
+[Apache License 2.0](LICENSE)
