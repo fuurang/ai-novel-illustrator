@@ -5,10 +5,12 @@ import Home from '@/pages/Home'
 import ProjectDetail from '@/pages/ProjectDetail'
 import Settings from '@/pages/Settings'
 import { useProjectStore } from '@/stores/projectStore'
+import { useTheme } from '@/hooks/useTheme'
 import { useEffect } from 'react'
 
 function Layout() {
   const fetchProjects = useProjectStore((s) => s.fetchProjects)
+  const { theme } = useTheme()
 
   useEffect(() => {
     fetchProjects()

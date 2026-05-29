@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, Settings, BookOpen, Loader2, Sun, Moon, MessageCircle } from 'lucide-react'
+import { Plus, Settings, BookOpen, Loader2, Sun, Moon, MessageCircle, X } from 'lucide-react'
 import { useProjectStore } from '@/stores/projectStore'
 import { useTheme } from '@/hooks/useTheme'
 import { useState } from 'react'
@@ -11,6 +11,7 @@ export default function Sidebar() {
   const { projects, currentProject, selectProject, createProject, loading } = useProjectStore()
   const { isDark, toggleTheme } = useTheme()
   const [uploadOpen, setUploadOpen] = useState(false)
+  const [qqModalOpen, setQqModalOpen] = useState(false)
 
   const handleSelect = async (id: string) => {
     await selectProject(id)
@@ -108,15 +109,13 @@ export default function Sidebar() {
           {isDark ? <Sun size={16} /> : <Moon size={16} />}
           {isDark ? '亮色模式' : '暗色模式'}
         </button>
-        <a
-          href="https://qm.qq.com/q/297144575"
-          target="_blank"
-          rel="noopener noreferrer"
+        <button
+          onClick={() => setQqModalOpen(true)}
           className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-text-secondary hover:bg-elevated hover:text-text-primary transition-colors duration-200"
         >
           <MessageCircle size={16} />
           QQ交流群
-        </a>
+        </button>
       </div>
 
       <UploadModal
@@ -125,6 +124,38 @@ export default function Sidebar() {
         onUpload={handleCreate}
         loading={loading}
       />
+
+      {qqModalOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setQqModalOpen(false)}>
+          <div className="bg-surface rounded-xl p-6 max-w-md w-[90vw]" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-text-primary">QQ 交流群</h3>
+              <button
+                onClick={() => setQqModalOpen(false)}
+                className="p-1.5 rounded-lg hover:bg-elevated text-text-secondary"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <img
+              src="/qq-group.jpg"
+              alt="QQ 群二维码"
+              className="w-full rounded-lg mb-4"
+            />
+            <p className="text-sm text-text-muted text-center">
+              群号：297144575
+            </p>
+            <a
+              href="https://qm.qq.com/q/297144575"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block mt-4 w-full bg-accent text-white rounded-lg py-2.5 text-center text-sm font-medium hover:bg-accent-hover transition-colors duration-200"
+            >
+              点击加入群聊
+            </a>
+          </div>
+        </div>
+      )}
     </aside>
   )
 }
