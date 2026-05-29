@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 from src.models.project import Project, ProjectStatus
@@ -177,6 +178,7 @@ class Pipeline:
         enable_image: bool = False,
         project_id: str = None,
         project_name: str = None,
+        chapter_indices: List[int] = None,
     ) -> PipelineContext:
         """
         运行完整的流水线
@@ -259,7 +261,7 @@ class Pipeline:
 
             if "extract" in stages and context:
                 progress.update(main_task, description=f"[cyan]阶段 3/6: {stage_descriptions.get('extract', '实体提取')}")
-                context = await self._stage_extract(context, progress)
+                context = await self._stage_extract(context, progress, chapter_indices)
                 if context is None:
                     return None
                 progress.advance(main_task)
@@ -273,14 +275,14 @@ class Pipeline:
 
             if "attribute" in stages and context:
                 progress.update(main_task, description=f"[cyan]阶段 5/6: {stage_descriptions.get('attribute', '属性构建')}")
-                context = await self._stage_attribute(context, progress)
+                context = await self._stage_attribute(context, progress, chapter_indices)
                 if context is None:
                     return None
                 progress.advance(main_task)
 
             if "prompt" in stages and context:
                 progress.update(main_task, description=f"[cyan]阶段 6/6: {stage_descriptions.get('prompt', '提示词生成')}")
-                context = await self._stage_prompt(context, progress)
+                context = await self._stage_prompt(context, progress, chapter_indices)
                 if context is None:
                     return None
                 progress.advance(main_task)
@@ -307,16 +309,32 @@ class Pipeline:
             if task_desc:
                 progress.update(progress.task_ids[0] if progress.task_ids else 0, description=task_desc)
 
-            text = self._preprocessor.read_file(input_path)
-            text = self._preprocessor.clean_text(text)
-            context.text = text
+            # 检查是否已经有章节数据了（避免重复处理）
+            existing_chapters = self.project_store.load_chapters(context.project.id)
+            if existing_chapters:
+                console.print(f"[yellow]![/yellow] 已存在 {len(existing_chapters)} 个章节，跳过预处理")
+                from src.models.chapter import Chapter
+                chapters = [Chapter(**ch) for ch in existing_chapters]
+                context.chapters = chapters
+                context.text = "\n\n".join([ch.text for ch in chapters])
+            else:
+                text = self._preprocessor.read_file(input_path)
+                text = self._preprocessor.clean_text(text)
+                context.text = text
+                chapters = self._preprocessor.split_chapters(text, context.project.id)
+                context.chapters = chapters
 
-            chapters = self._preprocessor.split_chapters(text, context.project.id)
-            context.chapters = chapters
-
+            # 保存时添加兼容字段 (index, chapter_number)
+            chapters_to_save = []
+            for c in chapters:
+                ch_dict = c.model_dump()
+                ch_dict["index"] = ch_dict["number"]
+                ch_dict["chapter_number"] = ch_dict["number"]
+                chapters_to_save.append(ch_dict)
+                
             self.project_store.save_chapters(
                 context.project.id,
-                [c.model_dump() for c in chapters]
+                chapters_to_save
             )
 
             context.project.status = ProjectStatus.EXTRACTING
@@ -408,6 +426,7 @@ class Pipeline:
         self,
         context: PipelineContext,
         progress: Progress = None,
+        chapter_indices: List[int] = None,
     ) -> PipelineContext:
         """阶段3：提取实体"""
         start_time = time.time()
@@ -417,10 +436,20 @@ class Pipeline:
             return context
 
         try:
-            chapters_to_process = [
-                c for c in context.chapters
-                if c.id not in context.processed_chapters
-            ]
+            # 首先确定要处理的章节
+            if chapter_indices:
+                # 按用户指定的章节索引筛选
+                chapters_to_process = [
+                    c for i, c in enumerate(context.chapters)
+                    if i + 1 in chapter_indices  # 章节号从1开始
+                ]
+                console.print(f"[cyan]![/cyan] 仅处理指定章节: {chapter_indices}")
+            else:
+                # 默认处理所有未处理的章节
+                chapters_to_process = [
+                    c for c in context.chapters
+                    if c.id not in context.processed_chapters
+                ]
 
             if not chapters_to_process:
                 console.print("[yellow]![/yellow] 没有需要处理的章节")
@@ -548,6 +577,7 @@ class Pipeline:
         self,
         context: PipelineContext,
         progress: Progress = None,
+        chapter_indices: List[int] = None,
     ) -> PipelineContext:
         """阶段5：构建属性"""
         start_time = time.time()
@@ -561,6 +591,11 @@ class Pipeline:
             return context
 
         try:
+            # 如果指定了章节，就只处理与这些章节相关的实体
+            if chapter_indices:
+                # 简单起见，这里还是处理所有实体，更精细的控制可以后续实现
+                console.print(f"[cyan]![/cyan] 构建属性（忽略章节限制，处理所有实体）")
+            
             entities_to_process = [
                 e for e in context.entities
                 if not e.attributes
@@ -628,6 +663,7 @@ class Pipeline:
         self,
         context: PipelineContext,
         progress: Progress = None,
+        chapter_indices: List[int] = None,
     ) -> PipelineContext:
         """阶段6：生成提示词"""
         start_time = time.time()
@@ -641,6 +677,10 @@ class Pipeline:
             return context
 
         try:
+            # 如果指定了章节，简单起见还是处理所有实体
+            if chapter_indices:
+                console.print(f"[cyan]![/cyan] 生成提示词（忽略章节限制，处理所有实体）")
+            
             entities_to_process = context.entities
 
             if not entities_to_process:

@@ -12,8 +12,11 @@ export function useTheme() {
   });
 
   useEffect(() => {
-    document.documentElement.classList.remove('light', 'dark');
-    document.documentElement.classList.add(theme);
+    const root = document.documentElement;
+    root.classList.remove('light', 'dark');
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    }
     localStorage.setItem('theme', theme);
   }, [theme]);
 

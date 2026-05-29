@@ -100,7 +100,7 @@ class Preprocessor:
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
             title = match.group().strip()
             body = text[start:end].replace(title, "", 1).strip()
-            
+
             if body.strip():
                 chapters.append(Chapter(
                     id=str(uuid.uuid4())[:8],
@@ -109,8 +109,22 @@ class Preprocessor:
                     title=title,
                     text=body,
                 ))
-        
+
         return chapters
+    
+    def split_chapters_with_extra_fields(self, text: str, project_id: str = "") -> list[dict]:
+        """
+        切分章节，并同时添加额外的字段用于兼容API
+        """
+        chapters = self.split_chapters(text, project_id)
+        result = []
+        for ch in chapters:
+            ch_dict = ch.model_dump()
+            # 添加兼容字段，同时有index和chapter_number，方便前后端使用
+            ch_dict["index"] = ch_dict["number"]
+            ch_dict["chapter_number"] = ch_dict["number"]
+            result.append(ch_dict)
+        return result
     
     def _split_by_window(self, text: str, project_id: str) -> list[Chapter]:
         """
