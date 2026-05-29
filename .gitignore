@@ -17,5 +17,11 @@ output/
 .DS_Store
 Thumbs.db
 
+设计方案.md
+技术文档.md
+Prompt模板库.md
+实施方案.md
+Web界面设计方案.md
+
 web/dist/
 web/node_modules/
