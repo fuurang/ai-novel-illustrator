@@ -20,7 +20,7 @@
 - **后端**: Python + FastAPI
 - **前端**: React + TypeScript + Vite + TailwindCSS
 - **LLM**: 支持任何 OpenAI 兼容 API（DeepSeek / GPT / 本地模型）
-- **生图**: 支持 ChatGPT2API / ComfyUI / SD WebUI / DALL-E
+- **生图**: 支持 OpenAI Images API / ComfyUI / SD WebUI / DALL-E
 
 ## 快速开始
 
@@ -64,10 +64,10 @@ llm:
 
 image:
   enabled: true
-  backend: "chatgpt2api"          # 或 comfyui / sd_webui / dall_e
-  chatgpt2api:
-    base_url: "http://localhost:5000/v1"
-    api_key: "your-image-api-key"
+  backend: "openai"               # 或 comfyui / sd_webui / dall_e
+  openai:
+    base_url: "https://api.openai.com/v1"  # 或其他 OpenAI 兼容地址
+    api_key: "your-api-key"
     model: "gpt-image-2"
 ```
 

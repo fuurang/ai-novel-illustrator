@@ -193,7 +193,7 @@ export default function Settings() {
               }
               className="w-full bg-elevated border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary outline-none focus:border-accent transition-colors duration-200"
             >
-              <option value="chatgpt2api">ChatGPT2API（推荐）</option>
+              <option value="chatgpt2api">OpenAI Images API（推荐）</option>
               <option value="comfyui">ComfyUI</option>
               <option value="sdwebui">Stable Diffusion WebUI</option>
               <option value="dalle">DALL·E API</option>
@@ -208,7 +208,7 @@ export default function Settings() {
                   type="text"
                   value={settings.image.chatgpt2api.base_url}
                   onChange={(e) => updateImageChatgpt2api('base_url', e.target.value)}
-                  placeholder="http://localhost:5000/v1"
+                  placeholder="https://api.openai.com/v1"
                   className="w-full bg-elevated border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent transition-colors duration-200 font-mono"
                 />
               </div>
@@ -218,7 +218,7 @@ export default function Settings() {
                   type="password"
                   value={settings.image.chatgpt2api.api_key}
                   onChange={(e) => updateImageChatgpt2api('api_key', e.target.value)}
-                  placeholder="biaooo"
+                  placeholder="sk-..."
                   className="w-full bg-elevated border border-border rounded-lg px-3 py-2.5 text-sm text-text-primary placeholder-text-muted outline-none focus:border-accent transition-colors duration-200 font-mono"
                 />
               </div>

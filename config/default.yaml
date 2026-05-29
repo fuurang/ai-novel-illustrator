@@ -31,7 +31,7 @@ image:
   enabled: false
   backend: "chatgpt2api"
   chatgpt2api:
-    base_url: "http://localhost:5000/v1"
+    base_url: "https://api.openai.com/v1"
     api_key: ""
     model: "gpt-image-2"
     timeout: 120
