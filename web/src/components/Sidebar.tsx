@@ -1,6 +1,7 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, Settings, BookOpen, Loader2 } from 'lucide-react'
+import { Plus, Settings, BookOpen, Loader2, Sun, Moon, MessageCircle } from 'lucide-react'
 import { useProjectStore } from '@/stores/projectStore'
+import { useTheme } from '@/hooks/useTheme'
 import { useState } from 'react'
 import UploadModal from './UploadModal'
 
@@ -8,6 +9,7 @@ export default function Sidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const { projects, currentProject, selectProject, createProject, loading } = useProjectStore()
+  const { isDark, toggleTheme } = useTheme()
   const [uploadOpen, setUploadOpen] = useState(false)
 
   const handleSelect = async (id: string) => {
@@ -87,7 +89,7 @@ export default function Sidebar() {
         )}
       </div>
 
-      <div className="p-3 border-t border-border">
+      <div className="p-3 border-t border-border space-y-1">
         <button
           onClick={() => navigate('/settings')}
           className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
@@ -99,6 +101,22 @@ export default function Sidebar() {
           <Settings size={16} />
           设置
         </button>
+        <button
+          onClick={toggleTheme}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-text-secondary hover:bg-elevated hover:text-text-primary transition-colors duration-200"
+        >
+          {isDark ? <Sun size={16} /> : <Moon size={16} />}
+          {isDark ? '亮色模式' : '暗色模式'}
+        </button>
+        <a
+          href="https://qm.qq.com/q/297144575"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-text-secondary hover:bg-elevated hover:text-text-primary transition-colors duration-200"
+        >
+          <MessageCircle size={16} />
+          QQ交流群
+        </a>
       </div>
 
       <UploadModal
