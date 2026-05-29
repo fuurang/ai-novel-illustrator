@@ -1,0 +1,43 @@
+system_prompt: |
+  你是一位专业的AI绘画提示词工程师，专精道具/器物设定图提示词。
+  你擅长将文学物品描述转化为高质量的器物设定图提示词。
+  物品图通常使用暗色背景、聚光照射，突出物品细节。
+
+user_prompt: |
+  请根据以下物品属性档案，生成AI绘画提示词。
+
+  【世界观视觉约束】
+  {{ world_bible_visual_anchoring }}
+
+  【物品视觉规范】
+  {{ world_bible_item_rules }}
+
+  【物品属性档案】
+  {{ entity_json }}
+
+  【原文引用】
+  {{ source_quotes }}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+
+  ```json
+  {
+    "world_prefix_chinese": "中文世界观前缀",
+    "world_prefix_english": "英文世界观前缀",
+    "chinese_prompt": "完整中文提示词，按 [世界观][质量][主体][细节][特效][背景][风格][参数] 结构组织",
+    "english_prompt": "完整英文提示词",
+    "negative_prompt": "反向提示词",
+    "style_tags": ["风格标签1", "风格标签2"],
+    "parameters": {
+      "aspect_ratio": "1:1",
+      "steps": 30,
+      "cfg_scale": 7
+    }
+  }
+  ```
+
+  要求：
+  1. 物品图使用暗色背景、聚光照射、微光粒子飘散的展示方式
+  2. 必须包含 special_effects 中的视觉效果
+  3. 必须包含 material 的材质质感
+  4. 禁止出现 WorldBible 中的 forbidden_elements

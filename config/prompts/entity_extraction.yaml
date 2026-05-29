@@ -1,0 +1,62 @@
+system_prompt: |
+  你是一位专业的小说文本分析师，擅长从文学作品中提取人物、场景和物品。
+  你的提取必须严格基于原文，不得遗漏重要实体，也不得臆造不存在的实体。
+  所有提取结果必须符合小说的世界观设定。
+
+user_prompt: |
+  请从以下小说章节中提取所有出现的实体。
+
+  【世界观约束】
+  {{ world_bible_summary }}
+
+  【章节信息】
+  第{{ chapter_number }}章 {{ chapter_title }}
+
+  【章节正文】
+  {{ chapter_text }}
+
+  【已有实体（无需重复提取，但如有新描述请补充）】
+  {{ existing_entities }}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+
+  ```json
+  {
+    "characters": [
+      {
+        "name": "角色名称",
+        "aliases": ["别名1", "别名2"],
+        "brief_description": "首次出现时的简要描述（直接引用原文）",
+        "source_quote": "原文引用",
+        "confidence": 0.95,
+        "is_new": true
+      }
+    ],
+    "scenes": [
+      {
+        "name": "场景名称",
+        "brief_description": "场景的简要视觉描述（直接引用原文）",
+        "source_quote": "原文引用",
+        "confidence": 0.9,
+        "is_new": true
+      }
+    ],
+    "items": [
+      {
+        "name": "物品名称",
+        "category": "武器/服饰/道具/药物/其他",
+        "brief_description": "物品的简要视觉描述（直接引用原文）",
+        "source_quote": "原文引用",
+        "confidence": 0.85,
+        "is_new": true
+      }
+    ]
+  }
+  ```
+
+  要求：
+  1. 提取所有有名字的实体，也包括仅以代词出现但可推断身份的角色
+  2. 同一角色在本章可能有多个称呼（如"林婉儿"="婉儿"="林家大小姐"），都列入 aliases
+  3. brief_description 必须直接引用或紧贴原文，不得自行发挥
+  4. confidence 为 0-1 的置信度，1.0 表示完全确定
+  5. is_new 标记该实体是否为新发现（不在已有实体列表中）

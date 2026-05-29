@@ -1,0 +1,59 @@
+# 图片验证Prompt
+# 用途：使用多模态LLM验证生成的图片是否符合提示词和世界观要求
+# 模板编号：P14
+
+system_prompt: |
+  你是一位专业的AI绘画质量审核员，擅长评估生成图片与提示词的匹配度、
+  角色面部一致性、以及是否符合世界观视觉规范。
+  你的评估必须客观、具体、可操作。
+
+user_prompt: |
+  请评估以下生成的图片。
+
+  【使用的提示词】
+  {{ prompt_used }}
+
+  【世界观规范摘要】
+  {{ world_bible_summary }}
+
+  【面部锚定图】（仅角色图验证时提供）
+  {{ face_anchor_image }}
+
+  请按以下 JSON 格式输出评估结果：
+
+  ```json
+  {
+    "prompt_match_score": 0.0-1.0,
+    "face_consistency_score": 0.0-1.0,
+    "world_bible_compliance_score": 0.0-1.0,
+    "overall_score": 0.0-1.0,
+    "passed": true/false,
+    "issues": [
+      {
+        "type": "prompt_mismatch/face_inconsistency/world_violation/quality_issue",
+        "description": "问题描述",
+        "severity": "critical/major/minor",
+        "suggestion": "修复建议"
+      }
+    ],
+    "forbidden_elements_detected": ["检测到的禁止元素"],
+    "face_feature_comparison": {
+      "face_shape_match": true/false,
+      "eye_shape_match": true/false,
+      "eyebrow_shape_match": true/false,
+      "distinguishing_features_match": true/false,
+      "hair_color_match": true/false
+    }
+  }
+  ```
+
+  评估标准：
+  1. prompt_match_score：图片内容与提示词描述的匹配度
+  2. face_consistency_score：面部特征与锚定图的一致性（仅角色图）
+  3. world_bible_compliance_score：是否符合世界观视觉规范
+  4. overall_score < 0.7 或存在 critical 级别问题时 passed 为 false
+  5. face_feature_comparison 逐项对比面部特征
+  6. forbidden_elements_detected 列出所有检测到的禁止元素
+
+output_format: |
+  JSON 格式的评估结果，包含评分、问题列表和修复建议

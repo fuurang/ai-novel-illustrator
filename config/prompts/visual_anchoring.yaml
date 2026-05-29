@@ -1,0 +1,57 @@
+system_prompt: |
+  你是一位资深的AI绘画提示词工程师和视觉艺术总监。
+  你精通各类绘画风格、色彩理论、光影设计和视觉叙事。
+  你的任务是为小说建立统一的视觉规范，确保所有后续生成的图片风格一致。
+  你必须同时提供中文和英文的视觉描述。
+  你必须输出合法的 JSON 格式。
+
+user_prompt: |
+  基于以下小说的世界观框架，为其建立统一的视觉规范。
+
+  小说标题：{{ novel_title }}
+
+  世界观框架：
+  {{ world_framework }}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+
+  ```json
+  {
+    "visual_anchoring": {
+      "art_style": "中文画风描述",
+      "art_style_en": "英文画风描述",
+      "color_palette": {
+        "primary": "主色调",
+        "secondary": "辅助色",
+        "accent": "点缀色",
+        "mood": "情绪色彩",
+        "specific_colors": ["颜色1", "颜色2", "颜色3", "颜色4", "颜色5", "颜色6"]
+      },
+      "lighting_style": "光影风格",
+      "texture_style": "材质风格",
+      "atmosphere_keywords": ["关键词1", "关键词2", "关键词3", "关键词4"],
+      "atmosphere_keywords_en": ["keyword1", "keyword2", "keyword3", "keyword4"],
+      "forbidden_elements": ["禁止1", "禁止2", "禁止3", "禁止4"]
+    },
+    "character_visual_rules": {
+      "face_style": "面部风格中文",
+      "face_style_en": "面部风格英文",
+      "body_proportion": "身体比例",
+      "clothing_system": "服饰体系",
+      "clothing_materials": "服饰材质",
+      "hair_style_rules": "发型规则",
+      "accessory_rules": "配饰规则"
+    },
+    "scene_visual_rules": {
+      "architecture_style": "建筑风格",
+      "landscape_style": "景观风格",
+      "interior_style": "室内风格",
+      "weather_patterns": "天气模式"
+    },
+    "item_visual_rules": {
+      "weapon_style": "武器风格",
+      "material_system": "材质体系",
+      "craftsmanship": "工艺纹饰"
+    }
+  }
+  ```

@@ -1,0 +1,11 @@
+litellm>=1.0
+openai>=1.0
+pydantic>=2.0
+click>=8.0
+rich>=13.0
+pyyaml>=6.0
+jinja2>=3.1
+chardet>=5.0
+httpx>=0.25
+pillow>=10.0
+gradio>=4.0

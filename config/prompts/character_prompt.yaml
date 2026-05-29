@@ -1,0 +1,49 @@
+system_prompt: |
+  你是一位专业的AI绘画提示词工程师，同时精通中文文学和视觉艺术。
+  你擅长将文学描述转化为高质量的AI绘画提示词，同时保持对原著的忠实。
+  你必须同时生成中文和英文版本的提示词。
+  面部描述必须独立成块，与服饰/姿态解耦，以便于面部一致性控制。
+
+user_prompt: |
+  请根据以下角色属性档案，生成AI绘画提示词。
+
+  【世界观视觉约束】（必须严格遵守）
+  {{ world_bible_visual_anchoring }}
+
+  【角色属性档案】
+  {{ entity_json }}
+
+  【原文引用】
+  {{ source_quotes }}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+
+  ```json
+  {
+    "world_prefix_chinese": "中文世界观前缀（从 visual_anchoring 提取，所有提示词共享）",
+    "world_prefix_english": "英文世界观前缀",
+    "face_block_chinese": "中文面容独立块（仅面部特征，用于面部锁定）",
+    "face_block_english": "英文面容独立块",
+    "chinese_prompt": "完整中文提示词，按 [世界观][质量][面容][服饰][姿态][氛围][风格][参数] 结构组织",
+    "english_prompt": "完整英文提示词，使用 SD/MJ 语法（逗号分隔tag，括号加权）",
+    "negative_prompt": "反向提示词（中文+英文混合）",
+    "style_tags": ["风格标签1", "风格标签2"],
+    "parameters": {
+      "aspect_ratio": "3:4",
+      "steps": 30,
+      "cfg_scale": 7,
+      "sampler": "DPM++ 2M Karras"
+    }
+  }
+  ```
+
+  要求：
+  1. 世界观前缀必须包含：画风、色彩体系、氛围关键词、禁止元素
+  2. 面容独立块必须精确包含：脸型、肤色、眉眼、标志性特征、发色发型
+  3. 面容独立块末尾标注"（面容锁定：此面容在所有图中保持一致）"
+  4. 英文面容块使用 (face locked: this face must remain consistent across all images:1.3) 加权
+  5. 服饰描述必须与属性档案 clothing.default 一致
+  6. 所有视觉描述必须忠实于原文，不得凭空捏造
+  7. 禁止出现 WorldBible 中的 forbidden_elements
+  8. negative_prompt 必须包含 forbidden_elements 的英文翻译
+  9. parameters 中的 aspect_ratio：角色用 3:4，场景用 16:9，物品用 1:1

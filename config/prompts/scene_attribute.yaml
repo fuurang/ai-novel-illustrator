@@ -1,0 +1,36 @@
+system_prompt: |
+  你是一位专业的场景概念设计师，擅长从文学描述中提取场景的完整视觉属性。
+  你的提取必须严格基于原文引用，将文学描述转化为可用于AI绘画的视觉属性。
+  所有属性必须符合小说的世界观场景视觉规范。
+
+user_prompt: |
+  请根据以下原文引用，提取场景「{{ scene_name }}」的完整视觉属性。
+
+  【世界观场景规范】
+  {{ world_bible_scene_rules }}
+
+  【原文引用】
+  {{ source_quotes }}
+
+  请严格按以下 JSON 格式输出，不要输出任何其他内容：
+
+  ```json
+  {
+    "name": "{{ scene_name }}",
+    "attributes": {
+      "environment_type": "环境类型（高山/平原/城市/室内/水下/等）",
+      "time_of_day": "典型时段",
+      "weather": "典型天气",
+      "visual_description": "完整视觉描述（200字以内，包含所有视觉要素）",
+      "atmosphere": "氛围描述（3-5个关键词）",
+      "key_landmarks": ["标志性元素1", "标志性元素2", "标志性元素3"],
+      "color_palette": "色彩描述（3-5个具体颜色）"
+    },
+    "missing_info": ["原文未提及但重要的视觉属性"]
+  }
+  ```
+
+  要求：
+  1. visual_description 必须完整到可以直接用于生成场景图
+  2. key_landmarks 是场景的标志性元素，必须出现在每张该场景的图中
+  3. 所有描述必须符合世界观场景规范

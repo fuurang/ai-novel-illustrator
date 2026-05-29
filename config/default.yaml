@@ -1,0 +1,46 @@
+llm:
+  provider: "openai_compatible"
+  model: "deepseek-chat"
+  api_key: ""
+  base_url: "https://api.deepseek.com/v1"
+  temperature: 0.3
+  max_tokens: 4096
+  extraction_model: "deepseek-chat"
+  prompt_model: "deepseek-chat"
+  vision_model: "qwen-vl-plus"
+
+world_bible:
+  analysis_chapters: 5
+  require_user_confirm: true
+
+extraction:
+  max_chapters_parallel: 3
+  entity_confidence_threshold: 0.7
+  dedup_similarity_threshold: 0.85
+  sliding_window_size: 50000
+  sliding_window_overlap: 5000
+
+prompt:
+  default_style: "auto"
+  generate_english: true
+  include_negative: true
+  include_world_prefix: true
+  face_block_independent: true
+
+image:
+  enabled: false
+  backend: "chatgpt2api"
+  chatgpt2api:
+    base_url: "http://localhost:5000/v1"
+    api_key: ""
+    model: "gpt-image-2"
+    timeout: 120
+
+face_consistency:
+  method: "edit_image"
+  similarity_threshold: 0.7
+  max_retries: 3
+
+output:
+  dir: "./output"
+  format: "both"
