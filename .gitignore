@@ -22,6 +22,9 @@ Thumbs.db
 Prompt模板库.md
 实施方案.md
 Web界面设计方案.md
+生图模块实现总结.md
+生图模块使用示例.md
+多Agent并行开发方案.md
 
 web/dist/
 web/node_modules/
