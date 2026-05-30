@@ -97,7 +97,7 @@ class WebImageGenerator:
         
         try:
             # 生成面部提示词
-            face_prompt = prompt.english_prompt
+            face_prompt = prompt.chinese_prompt
             
             # 如果有面部锚定生成器，使用它来生成更好的提示词
             if self.face_anchor_gen:
@@ -186,7 +186,7 @@ class WebImageGenerator:
             result = await self.backend._edit_async(
                 image_path=face_anchor_path,
                 mask_path=None,
-                prompt=prompt.english_prompt
+                prompt=prompt.chinese_prompt
             )
             
             if isinstance(result, dict) and 'error' in result:
@@ -244,7 +244,7 @@ class WebImageGenerator:
         try:
             # 直接生成场景图
             result = await self.backend._generate_async(
-                prompt.english_prompt,
+                prompt.chinese_prompt,
                 n=1,
                 size=self.default_sizes.get("scene", "1536x1024")
             )
@@ -304,7 +304,7 @@ class WebImageGenerator:
         try:
             # 直接生成物品图
             result = await self.backend._generate_async(
-                prompt.english_prompt,
+                prompt.chinese_prompt,
                 n=1,
                 size=self.default_sizes.get("item", "1024x1024")
             )

@@ -16,6 +16,14 @@ class SourceQuote(BaseModel):
     location: str = ""
 
 
+class ChapterAppearance(BaseModel):
+    chapter: int = 0
+    context: str = ""
+    appearance_note: str = ""
+    clothing_override: str = ""
+    source_quote: str = ""
+
+
 class WorldBinding(BaseModel):
     genre: str = ""
     era: str = ""
@@ -86,4 +94,7 @@ class Entity(BaseModel):
     attributes: dict = {}
     source_quotes: list[SourceQuote] = []
     first_appearance_chapter: int | None = None
+    chapter_appearances: list[ChapterAppearance] = []
+    chapter_range: str = ""
+    chapter_images: dict[str, str] = {}
     created_at: str = Field(default_factory=lambda: datetime.now().isoformat())

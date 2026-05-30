@@ -7,7 +7,7 @@ from typing import Optional
 
 from src.llm.adapter import LLMAdapter
 from src.llm.prompt_loader import PromptLoader
-from src.models.entity import Entity, EntityType, SourceQuote
+from src.models.entity import Entity, EntityType, SourceQuote, ChapterAppearance
 from src.models.prompt import Prompt, PromptParameters
 from src.models.world_bible import WorldBible
 
@@ -28,28 +28,66 @@ class PromptGenerator:
         self.prompt_loader = prompt_loader
         self.config = config or {}
         self.max_retries = self.config.get("max_retries", 3)
-        self.generate_english = self.config.get("generate_english", True)
         self.include_negative = self.config.get("include_negative", True)
     
-    async def generate(self, entity: Entity, world_bible: WorldBible) -> Prompt:
+    async def generate(
+        self,
+        entity: Entity,
+        world_bible: WorldBible,
+        chapter_indices: list[int] | None = None,
+    ) -> list[Prompt]:
         """
         为实体生成AI绘画提示词
         
         Args:
             entity: 实体对象
             world_bible: 世界观对象
+            chapter_indices: 章节索引列表，用于生成变体提示词
             
         Returns:
-            Prompt 对象
+            Prompt 对象列表
         """
         if entity.type == EntityType.CHARACTER:
-            return await self._generate_character(entity, world_bible)
+            base_prompt = await self._generate_character(entity, world_bible)
         elif entity.type == EntityType.SCENE:
-            return await self._generate_scene(entity, world_bible)
+            base_prompt = await self._generate_scene(entity, world_bible)
         elif entity.type == EntityType.ITEM:
-            return await self._generate_item(entity, world_bible)
-        
-        return self._create_empty_prompt(entity)
+            base_prompt = await self._generate_item(entity, world_bible)
+        else:
+            base_prompt = self._create_empty_prompt(entity)
+
+        prompts = []
+
+        if chapter_indices and entity.chapter_appearances:
+            for ch_idx in chapter_indices:
+                prompt_copy = base_prompt.model_copy()
+                prompt_copy.chapter_number = ch_idx
+                appearance = self._find_appearance(entity, ch_idx)
+                if appearance and appearance.clothing_override:
+                    prompt_copy.variant_label = f"第{ch_idx}章-{appearance.clothing_override}"
+                    prompt_copy.chinese_prompt = self._apply_clothing_override(
+                        prompt_copy.chinese_prompt, appearance.clothing_override
+                    )
+                else:
+                    prompt_copy.variant_label = f"第{ch_idx}章"
+                prompts.append(prompt_copy)
+        else:
+            if chapter_indices:
+                base_prompt.chapter_number = chapter_indices[0]
+            prompts.append(base_prompt)
+
+        return prompts
+
+    def _find_appearance(self, entity: Entity, chapter_number: int) -> ChapterAppearance | None:
+        for ca in entity.chapter_appearances:
+            if ca.chapter == chapter_number:
+                return ca
+        return None
+
+    def _apply_clothing_override(self, prompt_text: str, clothing_override: str) -> str:
+        if not clothing_override or not prompt_text:
+            return prompt_text
+        return prompt_text + f"，{clothing_override}"
     
     async def _generate_character(self, entity: Entity, wb: WorldBible) -> Prompt:
         """
@@ -157,11 +195,8 @@ class PromptGenerator:
             entity_id=entity.id,
             type=prompt_type,
             world_prefix_chinese=result.get("world_prefix_chinese", ""),
-            world_prefix_english=result.get("world_prefix_english", ""),
             face_block_chinese=result.get("face_block_chinese", ""),
-            face_block_english=result.get("face_block_english", ""),
             chinese_prompt=result.get("chinese_prompt", ""),
-            english_prompt=result.get("english_prompt", ""),
             negative_prompt=result.get("negative_prompt", ""),
             style_tags=result.get("style_tags", []),
             parameters=PromptParameters(
@@ -214,22 +249,18 @@ class PromptGenerator:
         face_block = f"{face_desc} {hair_desc} （面容锁定：此面容在所有图中保持一致）"
         
         chinese = f"{world_prefix} [角色] {entity.name}，{face_desc}，{clothing_desc}，{hair_desc}"
-        english = f"{wb.visual_anchoring.art_style_en}, {entity.name}, {face_desc}, {hair_desc}, {clothing_desc}"
         
-        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, low quality, blurry, deformed"
+        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, 低质量, 模糊, 变形"
         
         return Prompt(
             id=str(uuid.uuid4())[:8],
             entity_id=entity.id,
             type="character",
             world_prefix_chinese=world_prefix,
-            world_prefix_english=wb.visual_anchoring.art_style_en,
             face_block_chinese=face_block,
-            face_block_english=f"{face_desc}, {hair_desc} (face locked: this face must remain consistent:1.3)",
             chinese_prompt=chinese,
-            english_prompt=english,
             negative_prompt=negative,
-            style_tags=wb.visual_anchoring.atmosphere_keywords_en,
+            style_tags=wb.visual_anchoring.atmosphere_keywords,
             parameters=PromptParameters(aspect_ratio="3:4"),
         )
     
@@ -243,20 +274,17 @@ class PromptGenerator:
         landmarks_str = " ".join(key_landmarks) if key_landmarks else ""
         
         chinese = f"{world_prefix} [场景] {entity.name}，{visual_desc} {landmarks_str}"
-        english = f"{wb.visual_anchoring.art_style_en}, {entity.name}, {visual_desc} {landmarks_str}"
         
-        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, people, characters, low quality"
+        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, 人物, 低质量"
         
         return Prompt(
             id=str(uuid.uuid4())[:8],
             entity_id=entity.id,
             type="scene",
             world_prefix_chinese=world_prefix,
-            world_prefix_english=wb.visual_anchoring.art_style_en,
             chinese_prompt=chinese,
-            english_prompt=english,
             negative_prompt=negative,
-            style_tags=wb.visual_anchoring.atmosphere_keywords_en,
+            style_tags=wb.visual_anchoring.atmosphere_keywords,
             parameters=PromptParameters(aspect_ratio="16:9"),
         )
     
@@ -269,19 +297,16 @@ class PromptGenerator:
         world_prefix = f"[{wb.visual_anchoring.art_style}]"
         
         chinese = f"{world_prefix} [物品] {entity.name}，{visual_desc}，材质：{material}"
-        english = f"{wb.visual_anchoring.art_style_en}, {entity.name}, {visual_desc}, {material}"
         
-        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, low quality, blurry"
+        negative = f"{', '.join(wb.visual_anchoring.forbidden_elements)}, 低质量, 模糊"
         
         return Prompt(
             id=str(uuid.uuid4())[:8],
             entity_id=entity.id,
             type="item",
             world_prefix_chinese=world_prefix,
-            world_prefix_english=wb.visual_anchoring.art_style_en,
             chinese_prompt=chinese,
-            english_prompt=english,
             negative_prompt=negative,
-            style_tags=wb.visual_anchoring.atmosphere_keywords_en,
+            style_tags=wb.visual_anchoring.atmosphere_keywords,
             parameters=PromptParameters(aspect_ratio="1:1"),
         )

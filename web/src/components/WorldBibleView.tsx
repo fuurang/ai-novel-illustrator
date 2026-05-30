@@ -1,8 +1,12 @@
-import { BookOpen } from 'lucide-react'
+import { BookOpen, Edit2, Check, X, Save } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { api } from '@/api/client'
 
 interface WorldBibleViewProps {
   data: any
   loading?: boolean
+  projectId: string
+  onUpdate?: () => void
 }
 
 const defaultColors = ['#f97316', '#3b82f6', '#22c55e', '#a855f7', '#ec4899', '#eab308']
@@ -79,7 +83,19 @@ function transformToCategories(data: any): { name: string; color: string; items:
   return categories
 }
 
-export default function WorldBibleView({ data, loading }: WorldBibleViewProps) {
+export default function WorldBibleView({ data, loading, projectId, onUpdate }: WorldBibleViewProps) {
+  const [isEditing, setIsEditing] = useState(false)
+  const [editData, setEditData] = useState<any>(null)
+  const [saving, setSaving] = useState(false)
+  const [categories, setCategories] = useState<any[]>([])
+
+  useEffect(() => {
+    if (data) {
+      setEditData(JSON.parse(JSON.stringify(data)))
+      setCategories(transformToCategories(data))
+    }
+  }, [data])
+
   if (loading) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -96,8 +112,6 @@ export default function WorldBibleView({ data, loading }: WorldBibleViewProps) {
     )
   }
 
-  const categories = transformToCategories(data)
-
   if (!categories.length) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-text-muted">
@@ -108,44 +122,114 @@ export default function WorldBibleView({ data, loading }: WorldBibleViewProps) {
     )
   }
 
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {categories.map((category, idx) => (
-        <div
-          key={category.name}
-          className="bg-surface border border-border rounded-xl overflow-hidden transition-all duration-200 hover:border-border-hover"
-        >
-          <div
-            className="h-1.5"
-            style={{ backgroundColor: category.color || defaultColors[idx % defaultColors.length] }}
-          />
-          <div className="p-5">
-            <h3 className="text-base font-semibold text-text-primary mb-4">{category.name}</h3>
-            <div className="space-y-4">
-              {category.items.map((item) => (
-                <div key={item.name} className="group">
-                  <div className="text-sm font-medium text-text-primary mb-1">{item.name}</div>
-                  {item.keywords.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-2">
-                      {item.keywords.map((kw) => (
-                        <span
-                          key={kw}
-                          className="text-xs px-2 py-0.5 rounded-full bg-elevated text-text-secondary"
-                        >
-                          {kw}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {item.description && (
-                    <p className="text-xs text-text-muted leading-relaxed">{item.description}</p>
-                  )}
-                </div>
-              ))}
-            </div>
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await api.worldBible.update(projectId, editData)
+      setIsEditing(false)
+      onUpdate?.()
+    } catch (error) {
+      console.error('保存失败:', error)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleCancel = () => {
+    setEditData(JSON.parse(JSON.stringify(data)))
+    setIsEditing(false)
+  }
+
+  if (isEditing) {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-text-primary">编辑世界观</h2>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCancel}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-elevated rounded-md transition-colors"
+            >
+              <X size={14} />
+              取消
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-accent text-white rounded-md hover:bg-accent/90 transition-colors disabled:opacity-50"
+            >
+              {saving ? <Save size={14} className="animate-spin" /> : <Save size={14} />}
+              保存
+            </button>
           </div>
         </div>
-      ))}
+
+        <textarea
+          value={JSON.stringify(editData, null, 2)}
+          onChange={(e) => {
+            try {
+              const parsed = JSON.parse(e.target.value)
+              setEditData(parsed)
+            } catch {}
+          }}
+          className="w-full h-[600px] bg-surface border border-border rounded-xl p-4 text-sm font-mono text-text-primary placeholder-text-muted focus:outline-none focus:border-accent resize-none"
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-text-primary">世界观设定</h2>
+        <button
+          onClick={() => setIsEditing(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-text-secondary hover:text-text-primary hover:bg-elevated rounded-md transition-colors"
+        >
+          <Edit2 size={14} />
+          编辑
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {categories.map((category, idx) => (
+          <div
+            key={category.name}
+            className="bg-surface border border-border rounded-xl overflow-hidden transition-all duration-200 hover:border-border-hover"
+          >
+            <div
+              className="h-1.5"
+              style={{ backgroundColor: category.color || defaultColors[idx % defaultColors.length] }}
+            />
+            <div className="p-5">
+              <h3 className="text-base font-semibold text-text-primary mb-4">{category.name}</h3>
+              <div className="space-y-4">
+                {category.items.map((item: any) => (
+                  <div key={item.name} className="group">
+                    <div className="text-sm font-medium text-text-primary mb-1">{item.name}</div>
+                    {item.keywords.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mb-2">
+                        {item.keywords.map((kw: string) => (
+                          <span
+                            key={kw}
+                            className="text-xs px-2 py-0.5 rounded-full bg-elevated text-text-secondary"
+                          >
+                            {kw}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {item.description && (
+                      <p className="text-xs text-text-muted leading-relaxed">{item.description}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

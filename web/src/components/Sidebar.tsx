@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Plus, Settings, BookOpen, Loader2, Sun, Moon, MessageCircle, X } from 'lucide-react'
+import { Plus, Settings, BookOpen, Loader2, Sun, Moon, MessageCircle, X, Code2 } from 'lucide-react'
 import { useProjectStore } from '@/stores/projectStore'
 import { useTheme } from '@/hooks/useTheme'
 import { useState } from 'react'
@@ -91,6 +91,17 @@ export default function Sidebar() {
       </div>
 
       <div className="p-3 border-t border-border space-y-1">
+        <button
+          onClick={() => navigate('/prompts')}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${
+            location.pathname === '/prompts'
+              ? 'bg-elevated text-text-primary'
+              : 'text-text-secondary hover:bg-elevated hover:text-text-primary'
+          }`}
+        >
+          <Code2 size={16} />
+          提示词管理
+        </button>
         <button
           onClick={() => navigate('/settings')}
           className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200 ${

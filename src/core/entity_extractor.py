@@ -149,6 +149,9 @@ class EntityExtractor:
                 "is_new": char.get("is_new", True),
                 "chapter": chapter_number,
                 "location": f"第{chapter_number}章",
+                "context": char.get("context", ""),
+                "appearance_note": char.get("appearance_note", ""),
+                "clothing_override": char.get("clothing_override", ""),
             })
         
         for scene in result.get("scenes", []):
@@ -162,6 +165,9 @@ class EntityExtractor:
                 "is_new": scene.get("is_new", True),
                 "chapter": chapter_number,
                 "location": f"第{chapter_number}章",
+                "context": scene.get("context", ""),
+                "appearance_note": scene.get("appearance_note", ""),
+                "clothing_override": "",
             })
         
         for item in result.get("items", []):
@@ -176,6 +182,9 @@ class EntityExtractor:
                 "is_new": item.get("is_new", True),
                 "chapter": chapter_number,
                 "location": f"第{chapter_number}章",
+                "context": item.get("context", ""),
+                "appearance_note": item.get("appearance_note", ""),
+                "clothing_override": "",
             })
         
         return candidates

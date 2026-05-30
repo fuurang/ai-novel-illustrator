@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.storage.project_store import ProjectStore
@@ -22,8 +22,8 @@ _image_tasks: dict = {}
 
 
 class GenerateRequest(BaseModel):
-    """图片生成请求"""
     entity_ids: Optional[list[str]] = None
+    chapter: Optional[int] = None
 
 
 def _build_image_generator(config: dict) -> ImageGenerator:
@@ -38,8 +38,7 @@ def _build_image_generator(config: dict) -> ImageGenerator:
     return ImageGenerator(backend, config)
 
 
-async def _generate_images_for_project(project_id: str, entity_ids: Optional[list[str]] = None):
-    """为项目生成图片"""
+async def _generate_images_for_project(project_id: str, entity_ids: Optional[list[str]] = None, chapter: Optional[int] = None):
     config = load_config()
 
     entities_data = store.load_entities(project_id)
@@ -61,6 +60,21 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
         entities = [e for e in entities if e.id in entity_ids]
         prompts = [p for p in prompts if p.entity_id in entity_ids]
 
+    if chapter is not None:
+        chapter_entity_ids = set()
+        for e in entities:
+            for sq in e.source_quotes:
+                if sq.chapter == chapter:
+                    chapter_entity_ids.add(e.id)
+                    break
+            else:
+                for ca in e.chapter_appearances:
+                    if ca.chapter == chapter:
+                        chapter_entity_ids.add(e.id)
+                        break
+        entities = [e for e in entities if e.id in chapter_entity_ids]
+        prompts = [p for p in prompts if p.entity_id in chapter_entity_ids]
+
     project_dir = store.get_project_dir(project_id)
     output_dir = str(project_dir / "images")
     face_anchor_dir = str(project_dir / "images" / "face_anchors")
@@ -75,11 +89,24 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
         output_dir=output_dir,
     )
 
+    if chapter is not None:
+        entities_data = store.load_entities(project_id)
+        for e_data in entities_data:
+            if e_data.get("id") in chapter_entity_ids:
+                chapter_images = e_data.get("chapter_images", {})
+                if isinstance(results, dict):
+                    for key, val in results.items():
+                        if isinstance(val, str):
+                            chapter_images[str(chapter)] = val
+                        elif isinstance(val, dict) and "path" in val:
+                            chapter_images[str(chapter)] = val["path"]
+                e_data["chapter_images"] = chapter_images
+        store.save_entities(project_id, entities_data)
+
     return results
 
 
-async def _generate_single_entity_image(project_id: str, entity_id: str):
-    """为单个实体生成图片"""
+async def _generate_single_entity_image(project_id: str, entity_id: str, chapter: Optional[int] = None):
     config = load_config()
 
     entities_data = store.load_entities(project_id)
@@ -135,31 +162,46 @@ async def _generate_single_entity_image(project_id: str, entity_id: str):
     else:
         return {"error": f"不支持的实体类型: {entity.type}"}
 
-    return {"entity_id": entity_id, "image_path": result}
+    if chapter is not None:
+        for i, e in enumerate(entities_data):
+            if e.get("id") == entity_id:
+                chapter_images = e.get("chapter_images", {})
+                if isinstance(result, str):
+                    chapter_images[str(chapter)] = result
+                elif isinstance(result, dict) and "path" in result:
+                    chapter_images[str(chapter)] = result["path"]
+                entities_data[i]["chapter_images"] = chapter_images
+                break
+        store.save_entities(project_id, entities_data)
+
+    return {"entity_id": entity_id, "image_path": result, "chapter": chapter}
 
 
 @router.post("/{project_id}/generate")
 async def generate_images(project_id: str, request: GenerateRequest = None):
-    """批量生成图片"""
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
 
     entity_ids = request.entity_ids if request else None
+    chapter = request.chapter if request else None
 
-    task = asyncio.create_task(_generate_images_for_project(project_id, entity_ids))
+    task = asyncio.create_task(_generate_images_for_project(project_id, entity_ids, chapter))
     _image_tasks[f"{project_id}_batch"] = task
 
-    return {"message": "图片生成已启动", "project_id": project_id}
+    return {"message": "图片生成已启动", "project_id": project_id, "chapter": chapter}
 
 
 @router.post("/{project_id}/generate/{entity_id}")
-async def generate_entity_image(project_id: str, entity_id: str):
-    """生成单个实体图片"""
+async def generate_entity_image(
+    project_id: str,
+    entity_id: str,
+    chapter: Optional[int] = Query(None, description="关联章节号"),
+):
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
 
     try:
-        result = await _generate_single_entity_image(project_id, entity_id)
+        result = await _generate_single_entity_image(project_id, entity_id, chapter)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"图片生成失败: {str(e)}")
 
@@ -170,13 +212,33 @@ async def generate_entity_image(project_id: str, entity_id: str):
 
 
 @router.get("/{project_id}/images")
-async def list_images(project_id: str):
-    """获取所有图片信息"""
+async def list_images(
+    project_id: str,
+    chapter: Optional[int] = Query(None, description="按章节筛选"),
+):
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
 
     project_dir = store.get_project_dir(project_id)
     images_dir = project_dir / "images"
+
+    entities_data = store.load_entities(project_id)
+    entity_chapter_map: dict[str, list[int]] = {}
+    for e in entities_data:
+        eid = e.get("id", "")
+        chapters = set()
+        for sq in e.get("source_quotes", []):
+            sq_ch = sq if isinstance(sq, int) else sq.get("chapter", 0) if isinstance(sq, dict) else 0
+            if sq_ch:
+                chapters.add(sq_ch)
+        for ca in e.get("chapter_appearances", []):
+            ca_ch = ca if isinstance(ca, int) else ca.get("chapter", 0) if isinstance(ca, dict) else 0
+            if ca_ch:
+                chapters.add(ca_ch)
+        for ch_str, img_path in e.get("chapter_images", {}).items():
+            if ch_str.isdigit():
+                chapters.add(int(ch_str))
+        entity_chapter_map[eid] = list(chapters)
 
     images = []
     if images_dir.exists():
@@ -200,11 +262,22 @@ async def list_images(project_id: str):
                 if stem and not stem.startswith("."):
                     entity_id = stem.replace("_variation", "").replace("_v2", "")
 
-            images.append({
+            image_chapters = []
+            if entity_id and entity_id in entity_chapter_map:
+                image_chapters = entity_chapter_map[entity_id]
+
+            image_info = {
                 "path": f"/output/{project_id}/{str(relative).replace(chr(92), '/')}",
                 "filename": image_path.name,
                 "category": category,
                 "entity_id": entity_id,
-            })
+                "chapters": image_chapters,
+            }
+
+            if chapter is not None:
+                if chapter in image_chapters:
+                    images.append(image_info)
+            else:
+                images.append(image_info)
 
     return {"images": images, "total": len(images)}

@@ -1,4 +1,4 @@
-import { X, Image, FileText } from 'lucide-react'
+import { X, Image, FileText, BookOpen, Quote } from 'lucide-react'
 import { useEffect } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -11,6 +11,13 @@ interface EntityDrawerProps {
     description?: string
     prompt?: string
     attributes?: Record<string, string>
+    chapter_appearances?: Array<{
+      chapter: number
+      appearance_note?: string
+      clothing_override?: string
+      source_quote?: string
+    }>
+    chapter_range?: string
   } | null
   open: boolean
   onClose: () => void
@@ -116,6 +123,56 @@ export default function EntityDrawer({ entity, open, onClose }: EntityDrawerProp
                 <p className="text-xs font-mono text-text-secondary leading-relaxed whitespace-pre-wrap">
                   {entity.prompt}
                 </p>
+              </div>
+            </div>
+          )}
+
+          {entity.type === 'scene' && entity.chapter_range && (
+            <div>
+              <span className="text-xs text-text-muted font-medium">出现章节范围</span>
+              <div className="mt-2 flex items-center gap-2 text-sm text-text-secondary">
+                <BookOpen size={14} className="text-text-muted" />
+                第{entity.chapter_range}章
+              </div>
+            </div>
+          )}
+
+          {entity.chapter_appearances && entity.chapter_appearances.length > 0 && (
+            <div>
+              <span className="text-xs text-text-muted font-medium">章节变化</span>
+              <div className="mt-3 relative pl-5">
+                <div className="absolute left-[7px] top-1 bottom-1 w-px bg-border" />
+                {entity.chapter_appearances.map((appearance, idx) => (
+                  <div key={idx} className="relative pb-4 last:pb-0">
+                    <div className="absolute left-[-13px] top-1.5 w-3 h-3 rounded-full bg-accent border-2 border-surface" />
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-medium text-accent">
+                          第{appearance.chapter}章
+                        </span>
+                      </div>
+                      {appearance.appearance_note && (
+                        <p className="text-xs text-text-secondary leading-relaxed">
+                          {appearance.appearance_note}
+                        </p>
+                      )}
+                      {appearance.clothing_override && (
+                        <div className="text-xs text-text-secondary">
+                          <span className="text-text-muted">服装：</span>
+                          {appearance.clothing_override}
+                        </div>
+                      )}
+                      {appearance.source_quote && (
+                        <div className="flex items-start gap-1.5 bg-elevated rounded-md p-2 border border-border">
+                          <Quote size={10} className="text-text-muted shrink-0 mt-0.5" />
+                          <p className="text-[11px] text-text-muted italic leading-relaxed">
+                            {appearance.source_quote}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

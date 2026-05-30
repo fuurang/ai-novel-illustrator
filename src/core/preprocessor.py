@@ -82,6 +82,22 @@ class Preprocessor:
         
         return self._split_by_window(text, project_id)
     
+    def _extract_clean_title(self, title: str) -> str:
+        """
+        从匹配到的标题中提取纯标题，去掉章节编号前缀
+        """
+        # 去掉"第X章"、"Chapter X"等前缀
+        patterns = [
+            r"^第[一二三四五六七八九十百千万零\d]+[章节回卷集部]\s*",
+            r"^Chapter\s+\d+\s*",
+            r"^\d{1,4}[\.、]\s*",
+        ]
+        for pattern in patterns:
+            title = re.sub(pattern, "", title, flags=re.IGNORECASE)
+        # 去掉首尾的括号或空格
+        title = title.strip().lstrip("【】《》()（）").rstrip("【】《》()（）")
+        return title.strip()
+    
     def _split_by_matches(self, text: str, matches: list, project_id: str) -> list[Chapter]:
         """
         基于正则匹配结果切分章节
@@ -98,15 +114,16 @@ class Preprocessor:
         for i, match in enumerate(matches):
             start = match.start()
             end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            title = match.group().strip()
-            body = text[start:end].replace(title, "", 1).strip()
+            raw_title = match.group().strip()
+            clean_title = self._extract_clean_title(raw_title)
+            body = text[start:end].replace(raw_title, "", 1).strip()
 
             if body.strip():
                 chapters.append(Chapter(
                     id=str(uuid.uuid4())[:8],
                     project_id=project_id,
                     number=i + 1,
-                    title=title,
+                    title=clean_title,
                     text=body,
                 ))
 

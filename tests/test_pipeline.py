@@ -202,7 +202,7 @@ class TestProjectStore:
                 "id": "prompt_001",
                 "entity_id": "char_001",
                 "type": "character",
-                "english_prompt": "test prompt",
+                "chinese_prompt": "测试提示词",
                 "parameters": {},
             }
         ]
@@ -210,7 +210,7 @@ class TestProjectStore:
         loaded = self.store.load_prompts(project_id)
 
         assert len(loaded) == 1
-        assert loaded[0]["english_prompt"] == "test prompt"
+        assert loaded[0]["chinese_prompt"] == "测试提示词"
 
     def test_list_projects(self):
         """测试列出项目"""

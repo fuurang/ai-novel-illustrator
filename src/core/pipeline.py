@@ -314,7 +314,17 @@ class Pipeline:
             if existing_chapters:
                 console.print(f"[yellow]![/yellow] 已存在 {len(existing_chapters)} 个章节，跳过预处理")
                 from src.models.chapter import Chapter
-                chapters = [Chapter(**ch) for ch in existing_chapters]
+                chapters = []
+                for ch in existing_chapters:
+                    if isinstance(ch, Chapter):
+                        chapters.append(ch)
+                    elif isinstance(ch, dict):
+                        ch.setdefault("entity_ids", [])
+                        ch.setdefault("image_ids", [])
+                        ch.setdefault("summary", "")
+                        chapters.append(Chapter(**ch))
+                    else:
+                        chapters.append(ch)
                 context.chapters = chapters
                 context.text = "\n\n".join([ch.text for ch in chapters])
             else:
@@ -330,6 +340,9 @@ class Pipeline:
                 ch_dict = c.model_dump()
                 ch_dict["index"] = ch_dict["number"]
                 ch_dict["chapter_number"] = ch_dict["number"]
+                ch_dict.setdefault("entity_ids", [])
+                ch_dict.setdefault("image_ids", [])
+                ch_dict.setdefault("summary", "")
                 chapters_to_save.append(ch_dict)
                 
             self.project_store.save_chapters(
@@ -690,19 +703,22 @@ class Pipeline:
             semaphore = asyncio.Semaphore(3)
             generated_prompts = []
 
-            async def generate_entity_prompt(entity: Entity) -> Prompt:
+            async def generate_entity_prompt(entity: Entity) -> list[Prompt]:
                 async with semaphore:
                     return await self._prompt_generator.generate(
                         entity=entity,
                         world_bible=context.world_bible,
+                        chapter_indices=chapter_indices,
                     )
 
             tasks = [generate_entity_prompt(e) for e in entities_to_process]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for r in results:
-                if isinstance(r, Prompt):
-                    generated_prompts.append(r)
+                if isinstance(r, list):
+                    generated_prompts.extend(r)
+                elif isinstance(r, Exception):
+                    console.print(f"[yellow]提示词生成异常: {r}[/yellow]")
 
             context.prompts = generated_prompts
 

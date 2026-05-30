@@ -2,6 +2,7 @@ system_prompt: |
   你是一位专业的AI绘画提示词工程师，专精场景概念图提示词。
   你擅长将文学场景描述转化为高质量的场景概念图提示词。
   场景图不包含人物，仅展示环境和氛围。
+  你只需生成中文版本的提示词。
 
 user_prompt: |
   请根据以下场景属性档案，生成AI绘画提示词。
@@ -23,10 +24,8 @@ user_prompt: |
   ```json
   {
     "world_prefix_chinese": "中文世界观前缀",
-    "world_prefix_english": "英文世界观前缀",
     "chinese_prompt": "完整中文提示词，按 [世界观][质量][主体][环境][氛围][色调][风格][参数] 结构组织",
-    "english_prompt": "完整英文提示词",
-    "negative_prompt": "反向提示词",
+    "negative_prompt": "反向提示词（中文）",
     "style_tags": ["风格标签1", "风格标签2"],
     "parameters": {
       "aspect_ratio": "16:9",

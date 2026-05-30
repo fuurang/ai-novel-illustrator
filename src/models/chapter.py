@@ -9,3 +9,6 @@ class Chapter(BaseModel):
     title: str = ""
     text: str = ""
     is_processed: bool = False
+    entity_ids: list[str] = []
+    image_ids: list[str] = []
+    summary: str = ""

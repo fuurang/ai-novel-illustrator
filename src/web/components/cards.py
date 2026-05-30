@@ -145,10 +145,10 @@ def prompt_card(prompt: Dict[str, Any]) -> None:
         gr.Markdown(f"**类型**: {type_labels.get(prompt_type, prompt_type)}")
         gr.Markdown(f"**参数**: {aspect_ratio} | {steps}步 | CFG {cfg_scale}")
         
-        english_prompt = prompt.get('english_prompt', '')
-        if english_prompt:
-            with gr.Accordion("📜 英文提示词", open=False):
-                gr.Code(english_prompt, language="text", lines=5)
+        chinese_prompt = prompt.get('chinese_prompt', '')
+        if chinese_prompt:
+            with gr.Accordion("📜 中文提示词", open=False):
+                gr.Code(chinese_prompt, language="text", lines=5)
         
         world_prefix = prompt.get('world_prefix_chinese', '')
         if world_prefix:
@@ -160,7 +160,7 @@ def prompt_card(prompt: Dict[str, Any]) -> None:
             with gr.Accordion("⚠️ 负向提示词", open=False):
                 gr.Code(negative, language="text", lines=3)
         
-        face_block = prompt.get('face_block_english', '')
+        face_block = prompt.get('face_block_chinese', '')
         if face_block:
             with gr.Accordion("🔒 面容锁定", open=False):
                 gr.Code(face_block, language="text", lines=3)

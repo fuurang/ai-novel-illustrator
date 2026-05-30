@@ -390,22 +390,22 @@ def prompt(ctx, project_id: str, prompt_id: str, filter_type: str, limit: int):
         console.print(f"  CFG: {params.get('cfg_scale', 7.0)}")
         console.print(f"  采样器: {params.get('sampler', 'DPM++ 2M Karras')}")
         
-        console.print(f"\n[cyan]世界观前缀 (CN):[/cyan]")
+        console.print(f"\n[cyan]世界观前缀:[/cyan]")
         console.print(Panel(
             target_prompt.get('world_prefix_chinese', ''),
             border_style="blue"
         ))
         
-        console.print(f"\n[cyan]正向提示词 (EN):[/cyan]")
+        console.print(f"\n[cyan]正向提示词:[/cyan]")
         console.print(Panel(
-            target_prompt.get('english_prompt', ''),
+            target_prompt.get('chinese_prompt', ''),
             border_style="green"
         ))
         
-        if target_prompt.get('face_block_english'):
+        if target_prompt.get('face_block_chinese'):
             console.print(f"\n[cyan]面容锁定:[/cyan]")
             console.print(Panel(
-                target_prompt.get('face_block_english', ''),
+                target_prompt.get('face_block_chinese', ''),
                 border_style="yellow"
             ))
         
@@ -440,12 +440,12 @@ def prompt(ctx, project_id: str, prompt_id: str, filter_type: str, limit: int):
         table = Table(box=box.ROUNDED)
         table.add_column("ID", style="cyan")
         table.add_column("类型", style="yellow")
-        table.add_column("英文提示词", style="white")
+        table.add_column("中文提示词", style="white")
         table.add_column("参数", style="green")
         
         for p in prompts[:limit]:
             prompt_type = p.get('type', 'unknown')
-            eng_prompt = p.get('english_prompt', '')[:50]
+            cn_prompt = p.get('chinese_prompt', '')[:50]
             params = p.get('parameters', {})
             ar = params.get('aspect_ratio', '1:1')
             steps = params.get('steps', 30)
@@ -453,7 +453,7 @@ def prompt(ctx, project_id: str, prompt_id: str, filter_type: str, limit: int):
             table.add_row(
                 p.get('id', 'N/A')[:8],
                 prompt_type,
-                eng_prompt + "..." if len(p.get('english_prompt', '')) > 50 else eng_prompt,
+                cn_prompt + "..." if len(p.get('chinese_prompt', '')) > 50 else cn_prompt,
                 f"{ar} @ {steps}步"
             )
         

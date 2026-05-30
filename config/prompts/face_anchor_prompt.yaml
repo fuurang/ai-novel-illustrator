@@ -6,6 +6,7 @@ system_prompt: |
   你是一位专业的AI绘画提示词工程师，专精人物面部特写图。
   面部锚定图的要求极其严格：正面、中性表情、纯色背景、均匀光照、高细节。
   面部锚定图将作为后续所有该角色生图的面部参考，必须精确捕捉所有面部特征。
+  你只需生成中文版本的提示词。
 
 user_prompt: |
   请为角色「{{ character_name }}」生成面部锚定图的提示词。
@@ -16,16 +17,12 @@ user_prompt: |
   【面容独立块（中文）】
   {{ face_block_chinese }}
 
-  【面容独立块（英文）】
-  {{ face_block_english }}
-
   请按以下 JSON 格式输出：
 
   ```json
   {
     "chinese_prompt": "中文面部锚定图提示词",
-    "english_prompt": "英文面部锚定图提示词",
-    "negative_prompt": "反向提示词",
+    "negative_prompt": "反向提示词（中文）",
     "parameters": {
       "aspect_ratio": "1:1",
       "steps": 40,

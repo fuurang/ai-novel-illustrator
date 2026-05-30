@@ -1,82 +1,23 @@
 import { useNavigate } from 'react-router-dom'
-import { Upload, BookOpen, Users, MapPin, Box, ArrowRight, Clock } from 'lucide-react'
+import { Upload, BookOpen, Clock, ArrowRight } from 'lucide-react'
 import { useProjectStore } from '@/stores/projectStore'
 import { useState, useEffect } from 'react'
-import StatCard from '@/components/StatCard'
-import PipelineControl from '@/components/PipelineControl'
 import UploadModal from '@/components/UploadModal'
 
 export default function Home() {
   const navigate = useNavigate()
-  const { projects, currentProject, fetchProjects, selectProject, createProject, loading } = useProjectStore()
+  const { projects, fetchProjects, selectProject, createProject, loading } = useProjectStore()
   const [uploadOpen, setUploadOpen] = useState(false)
 
   useEffect(() => {
     fetchProjects()
   }, [fetchProjects])
 
-  if (currentProject) {
-    return (
-      <div className="p-6 space-y-6 max-w-5xl">
-        <div>
-          <h1 className="text-lg font-semibold text-text-primary">{currentProject.name}</h1>
-          <p className="text-sm text-text-muted mt-1">{currentProject.novel_name}</p>
-        </div>
-
-        <div className="grid grid-cols-3 gap-4">
-          <StatCard
-            icon={Users}
-            value={currentProject.stats?.characters ?? 0}
-            label="角色"
-            color="text-blue-400"
-          />
-          <StatCard
-            icon={MapPin}
-            value={currentProject.stats?.scenes ?? 0}
-            label="场景"
-            color="text-emerald-400"
-          />
-          <StatCard
-            icon={Box}
-            value={currentProject.stats?.items ?? 0}
-            label="物品"
-            color="text-amber-400"
-          />
-        </div>
-
-        <PipelineControl />
-
-        <div className="bg-surface border border-border rounded-xl p-5">
-          <h3 className="text-base font-semibold text-text-primary mb-4">快速操作</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={() => navigate(`/project/${currentProject.id}`)}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:border-border-hover hover:bg-elevated transition-all duration-200 text-left"
-            >
-              <div className="p-2 rounded-lg bg-accent/10 text-accent">
-                <BookOpen size={18} />
-              </div>
-              <div>
-                <div className="text-sm text-text-primary">查看详情</div>
-                <div className="text-xs text-text-muted">浏览实体与世界观数据</div>
-              </div>
-            </button>
-            <button
-              onClick={() => navigate(`/project/${currentProject.id}?tab=gallery`)}
-              className="flex items-center gap-3 p-3 rounded-lg border border-border hover:border-border-hover hover:bg-elevated transition-all duration-200 text-left"
-            >
-              <div className="p-2 rounded-lg bg-emerald-400/10 text-emerald-400">
-                <MapPin size={18} />
-              </div>
-              <div>
-                <div className="text-sm text-text-primary">查看图集</div>
-                <div className="text-xs text-text-muted">浏览生成的图片</div>
-              </div>
-            </button>
-          </div>
-        </div>
-      </div>
-    )
+  const handleUpload = async (file: File, name: string) => {
+    await createProject(file, name)
+    setUploadOpen(false)
+    const project = useProjectStore.getState().currentProject
+    if (project) navigate(`/project/${project.id}`)
   }
 
   return (
@@ -135,10 +76,7 @@ export default function Home() {
       <UploadModal
         open={uploadOpen}
         onClose={() => setUploadOpen(false)}
-        onUpload={async (file, name) => {
-          await createProject(file, name)
-          setUploadOpen(false)
-        }}
+        onUpload={handleUpload}
         loading={loading}
       />
     </div>

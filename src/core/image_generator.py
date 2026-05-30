@@ -71,7 +71,7 @@ class ImageGenerator:
         face_anchor_bytes = Path(face_anchor_path).read_bytes()
         
         image_bytes = await self.backend.generate_character_with_face(
-            character_prompt=prompt.english_prompt,
+            character_prompt=prompt.chinese_prompt,
             face_anchor_bytes=face_anchor_bytes,
             size=size,
         )
@@ -113,7 +113,7 @@ class ImageGenerator:
             style_ref = Path(style_reference_path).read_bytes()
 
         image_bytes = await self.backend.generate_scene(
-            scene_prompt=prompt.english_prompt,
+            scene_prompt=prompt.chinese_prompt,
             style_reference=style_ref,
             size=size,
         )
@@ -147,7 +147,7 @@ class ImageGenerator:
             Exception: 生成失败时抛出异常
         """
         image_bytes = await self.backend.generate_item(
-            item_prompt=prompt.english_prompt,
+            item_prompt=prompt.chinese_prompt,
             size=size,
         )
         
@@ -260,7 +260,7 @@ class ImageGenerator:
         Returns:
             str: 生成图路径
         """
-        combined_prompt = f"{prompt.english_prompt}, {clothing_description}"
+        combined_prompt = f"{prompt.chinese_prompt}, {clothing_description}"
         
         face_anchor_bytes = Path(face_anchor_path).read_bytes()
         

@@ -5,7 +5,7 @@ import uuid
 from difflib import SequenceMatcher
 from typing import Optional
 
-from src.models.entity import Entity, EntityType, SourceQuote
+from src.models.entity import Entity, EntityType, SourceQuote, ChapterAppearance
 
 
 class EntityMerger:
@@ -94,38 +94,51 @@ class EntityMerger:
         return None
     
     def _merge_into(self, entity: Entity, candidate: dict):
-        """
-        将候选实体的信息合并到已有实体
-        
-        Args:
-            entity: 目标实体（会被直接修改）
-            candidate: 候选实体字典
-        """
         new_aliases = [
             a for a in candidate.get("aliases", [])
             if a not in entity.aliases and a != entity.name and a.strip()
         ]
         entity.aliases.extend(new_aliases)
-        
+
         source_quote = candidate.get("source_quote", "").strip()
         if source_quote:
             existing_quotes = [sq.text for sq in entity.source_quotes]
             if source_quote not in existing_quotes:
                 chapter = candidate.get("chapter", 0)
                 location = candidate.get("location", f"第{chapter}章")
-                
+
                 entity.source_quotes.append(SourceQuote(
                     chapter=chapter,
                     text=source_quote,
                     location=location,
                 ))
-        
+
         if entity.first_appearance_chapter is None:
             entity.first_appearance_chapter = candidate.get("chapter", 0)
         else:
             new_chapter = candidate.get("chapter", 0)
             if new_chapter and new_chapter < entity.first_appearance_chapter:
                 entity.first_appearance_chapter = new_chapter
+
+        chapter = candidate.get("chapter", 0)
+        existing_chapters = {ca.chapter for ca in entity.chapter_appearances}
+        if chapter and chapter not in existing_chapters:
+            entity.chapter_appearances.append(ChapterAppearance(
+                chapter=chapter,
+                context=candidate.get("context", ""),
+                appearance_note=candidate.get("appearance_note", ""),
+                clothing_override=candidate.get("clothing_override", ""),
+                source_quote=candidate.get("source_quote", ""),
+            ))
+
+        if entity.type == EntityType.SCENE and entity.chapter_appearances:
+            chapters = [ca.chapter for ca in entity.chapter_appearances]
+            min_ch = min(chapters)
+            max_ch = max(chapters)
+            if min_ch == max_ch:
+                entity.chapter_range = str(min_ch)
+            else:
+                entity.chapter_range = f"{min_ch}-{max_ch}"
     
     def _to_entity(self, candidate: dict, project_id: str) -> Entity:
         """
@@ -160,6 +173,21 @@ class EntityMerger:
                 location=location,
             ))
         
+        chapter = candidate.get("chapter", 0)
+        chapter_appearances = []
+        if chapter:
+            chapter_appearances.append(ChapterAppearance(
+                chapter=chapter,
+                context=candidate.get("context", ""),
+                appearance_note=candidate.get("appearance_note", ""),
+                clothing_override=candidate.get("clothing_override", ""),
+                source_quote=source_quote,
+            ))
+
+        chapter_range = ""
+        if entity_type == EntityType.SCENE and chapter:
+            chapter_range = str(chapter)
+
         return Entity(
             id=f"{type_str}_{str(uuid.uuid4())[:8]}",
             project_id=project_id,
@@ -167,7 +195,9 @@ class EntityMerger:
             aliases=[a for a in candidate.get("aliases", []) if a.strip() and a != name],
             type=entity_type,
             source_quotes=source_quotes,
-            first_appearance_chapter=candidate.get("chapter", 0),
+            first_appearance_chapter=chapter,
+            chapter_appearances=chapter_appearances,
+            chapter_range=chapter_range,
         )
     
     def _similarity(self, a: str, b: str) -> float:

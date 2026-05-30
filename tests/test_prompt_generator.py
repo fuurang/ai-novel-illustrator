@@ -46,11 +46,8 @@ class TestPrompt:
             entity_id="char_001",
             type="character",
             world_prefix_chinese="[古风水墨] 仙侠 神秘",
-            world_prefix_english="Ancient Chinese ink painting style, Xianxia, mystical",
             face_block_chinese="俊美面容，长发束冠，眼神深邃",
-            face_block_english="Handsome face, long hair tied up, deep eyes",
             chinese_prompt="[古风水墨] 仙侠 神秘 角色 张三，俊美面容，长发束冠，身穿白色道袍",
-            english_prompt="Ancient Chinese ink painting style, Xianxia, mystical, character Zhang San, handsome face, white Taoist robe",
             negative_prompt="现代建筑, 低质量, 模糊, 变形",
             style_tags=["古风", "仙侠", "水墨"],
             parameters=PromptParameters(aspect_ratio="3:4"),
@@ -72,9 +69,7 @@ class TestPrompt:
             entity_id="scene_001",
             type="scene",
             world_prefix_chinese="[古风水墨] 仙侠",
-            world_prefix_english="Ancient Chinese ink painting style, Xianxia",
             chinese_prompt="[古风水墨] 仙侠 神秘森林，古老的树木参天，雾气缭绕",
-            english_prompt="Ancient Chinese ink painting style, Xianxia, mysterious forest, ancient towering trees, mist swirling",
             negative_prompt="现代建筑, 人类, 低质量",
             parameters=PromptParameters(aspect_ratio="16:9"),
         )
@@ -89,7 +84,6 @@ class TestPrompt:
             entity_id="item_001",
             type="item",
             chinese_prompt="[古风] 神剑，金色剑身，剑柄镶有宝石",
-            english_prompt="Ancient style, divine sword, golden blade, gem-inlaid hilt",
             parameters=PromptParameters(aspect_ratio="1:1"),
         )
 
@@ -103,7 +97,6 @@ class TestPrompt:
             entity_id="char_test",
             type="character",
             chinese_prompt="测试提示词",
-            english_prompt="test prompt",
             parameters=PromptParameters(),
         )
 
@@ -113,7 +106,6 @@ class TestPrompt:
         assert data['entity_id'] == "char_test"
         assert data['type'] == "character"
         assert data['chinese_prompt'] == "测试提示词"
-        assert data['english_prompt'] == "test prompt"
 
     def test_prompt_deserialization(self):
         """测试提示词反序列化"""
@@ -122,11 +114,8 @@ class TestPrompt:
             'entity_id': 'char_test',
             'type': 'character',
             'world_prefix_chinese': '',
-            'world_prefix_english': '',
             'face_block_chinese': '',
-            'face_block_english': '',
             'chinese_prompt': '测试中文提示词',
-            'english_prompt': 'test english prompt',
             'negative_prompt': '',
             'style_tags': ['test'],
             'parameters': {

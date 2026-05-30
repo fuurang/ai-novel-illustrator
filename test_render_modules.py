@@ -183,7 +183,7 @@ async def test_data_models():
             id="prompt_001",
             entity_id="char_001",
             type="character",
-            english_prompt="A beautiful Chinese ancient style woman",
+            chinese_prompt="古风仙侠女子，身穿白色道袍",
         )
         print(f"✓ Prompt 创建成功: {prompt.type}")
         

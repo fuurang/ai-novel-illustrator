@@ -101,18 +101,17 @@ class FaceAnchorGenerator:
             system, user = self.prompt_loader.render("face_anchor_prompt", {
                 "character_name": entity.name,
                 "face_block_chinese": character_prompt.face_block_chinese,
-                "face_block_english": character_prompt.face_block_english,
-                "world_bible_face_style": world_bible.character_visual_rules.face_style_en,
+                "world_bible_face_style": world_bible.character_visual_rules.face_style,
             })
             
             import asyncio
             loop = asyncio.get_event_loop()
             result = loop.run_until_complete(self.llm.generate_json(user, system))
-            return result.get("english_prompt", character_prompt.english_prompt)
+            return result.get("chinese_prompt", character_prompt.chinese_prompt)
         except FileNotFoundError:
-            return character_prompt.english_prompt
+            return character_prompt.chinese_prompt
         except Exception:
-            return character_prompt.english_prompt
+            return character_prompt.chinese_prompt
 
     async def generate_from_description(
         self,
