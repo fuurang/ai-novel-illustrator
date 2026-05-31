@@ -108,12 +108,15 @@ class PromptLoader:
         system_prompt = ""
         user_prompt = ""
         
-        if system_key in template:
-            system_template = Template(template[system_key])
+        actual_system_key = system_key if system_key in template else "system_prompt"
+        actual_user_key = user_key if user_key in template else "user_prompt"
+
+        if actual_system_key in template:
+            system_template = Template(template[actual_system_key])
             system_prompt = system_template.render(**context)
-        
-        if user_key in template:
-            user_template = Template(template[user_key])
+
+        if actual_user_key in template:
+            user_template = Template(template[actual_user_key])
             user_prompt = user_template.render(**context)
         
         return system_prompt, user_prompt

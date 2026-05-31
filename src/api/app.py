@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from src.api.routers import projects, pipeline, entities, world_bible, images, settings, chapters, prompts
+from src.api.routers import projects, pipeline, entities, world_bible, images, settings, chapters, prompts, ai_workspace
 
 
 def create_app() -> FastAPI:
@@ -23,12 +23,16 @@ def create_app() -> FastAPI:
     app.include_router(world_bible.router, prefix="/api/projects", tags=["world_bible"])
     app.include_router(images.router, prefix="/api/projects", tags=["images"])
     app.include_router(chapters.router, prefix="/api/projects", tags=["chapters"])
+    app.include_router(ai_workspace.router, prefix="/api/projects", tags=["ai_workspace"])
     app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
     app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
 
-    output_dir = Path("./output")
+    output_dir = Path("./projects")
     output_dir.mkdir(exist_ok=True)
     app.mount("/output", StaticFiles(directory=str(output_dir)), name="output")
+    legacy_output_dir = Path("./output")
+    legacy_output_dir.mkdir(exist_ok=True)
+    app.mount("/legacy-output", StaticFiles(directory=str(legacy_output_dir)), name="legacy_output")
 
     @app.get("/api/health")
     async def health_check():

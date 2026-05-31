@@ -5,7 +5,8 @@ interface PipelineState {
   runningStage: string
   stageProgress: number
   stageMessage: string
-  runStage: (projectId: string, stage: string, chapterIndices?: number[]) => Promise<void>
+  runStage: (projectId: string, stage: string, chapterIndices?: number[], options?: any) => Promise<void>
+  setStageMessage: (message: string) => void
   reset: () => void
 }
 
@@ -14,11 +15,11 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   stageProgress: 0,
   stageMessage: '',
 
-  runStage: async (projectId: string, stage: string, chapterIndices?: number[]) => {
+  runStage: async (projectId: string, stage: string, chapterIndices?: number[], options?: any) => {
     set({ runningStage: stage, stageProgress: 0, stageMessage: `正在执行: ${stage}` })
 
     try {
-      await api.pipeline.runStage(projectId, stage, chapterIndices)
+      await api.pipeline.runStage(projectId, stage, chapterIndices, options)
     } catch (e: any) {
       set({
         runningStage: '',
@@ -51,6 +52,10 @@ export const usePipelineStore = create<PipelineState>((set) => ({
       set({ runningStage: '', stageProgress: 0, stageMessage: '连接已断开' })
       source.close()
     }
+  },
+
+  setStageMessage: (message: string) => {
+    set({ stageMessage: message })
   },
 
   reset: () => {

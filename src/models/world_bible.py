@@ -72,6 +72,7 @@ class WorldBible(BaseModel):
     id: str = ""
     project_id: str = ""
     novel_title: str = ""
+    user_worldview_text: str = ""
     world_framework: WorldFramework = WorldFramework()
     visual_anchoring: VisualAnchoring = VisualAnchoring()
     character_visual_rules: CharacterVisualRules = CharacterVisualRules()

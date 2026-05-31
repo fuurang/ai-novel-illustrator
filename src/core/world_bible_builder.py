@@ -108,6 +108,14 @@ class WorldBibleBuilder:
                     {
                         "novel_title": novel_title,
                         "world_framework": json.dumps(framework, ensure_ascii=False),
+                        "source_evidence": json.dumps(
+                            {
+                                "setting_evidence": framework.get("setting_evidence", []),
+                                "visual_evidence": framework.get("visual_evidence", []),
+                                "style_inference_notes": framework.get("style_inference_notes", []),
+                            },
+                            ensure_ascii=False,
+                        ),
                     },
                 )
                 result = await self.llm.generate_json(user_prompt, system_prompt)
@@ -187,49 +195,49 @@ class WorldBibleBuilder:
             "仙侠": ("古风水墨", "Ancient Chinese ink painting style"),
             "玄幻": ("奇幻写实", "Fantasy realistic style"),
             "都市": ("现代写实", "Modern realistic photography style"),
-            "科幻": ("赛博朋克", "Cyberpunk style"),
+            "科幻": ("克制近未来写实", "Restrained near-future realistic style"),
             "历史": ("古典写实", "Classical realistic style"),
-            "言情": ("小清新", "Soft pastel style"),
-            "悬疑": ("暗色调", "Dark noir style"),
+            "言情": ("现代生活写实", "Modern slice-of-life realistic style"),
+            "悬疑": ("冷调现实主义", "Cold-toned realistic noir style"),
         }
         
-        art_style, art_style_en = art_styles.get(genre, ("通用风格", "General style"))
+        art_style, art_style_en = art_styles.get(genre, ("现代现实灾变写实", "Modern post-apocalyptic realistic style"))
         
         return {
             "visual_anchoring": VisualAnchoring(
                 art_style=art_style,
                 art_style_en=art_style_en,
                 color_palette=ColorPalette(
-                    primary="蓝色",
-                    secondary="白色",
-                    accent="金色",
-                    mood="清爽",
-                    specific_colors=["#FFFFFF", "#87CEEB", "#F5F5DC", "#DAA520", "#2F4F4F", "#8B4513"],
+                    primary="灰黑色",
+                    secondary="水泥灰",
+                    accent="警示红",
+                    mood="压抑、冷峻、末日生存感",
+                    specific_colors=["#111827", "#374151", "#6B7280", "#B91C1C", "#D97706", "#E5E7EB"],
                 ),
-                lighting_style="自然光",
-                texture_style="细腻质感",
-                atmosphere_keywords=["清新", "自然", "和谐"],
-                atmosphere_keywords_en=["fresh", "natural", "harmonious"],
-                forbidden_elements=["现代建筑", "高科技设备", "西方风格"],
+                lighting_style="低照度自然光、应急灯、阴天漫射光",
+                texture_style="破损水泥、金属锈蚀、灰尘、污渍、潮湿痕迹",
+                atmosphere_keywords=["现代", "灾变", "压抑", "生存", "秩序崩坏"],
+                atmosphere_keywords_en=["modern", "post-apocalyptic", "oppressive", "survival", "social collapse"],
+                forbidden_elements=["古风服饰", "仙侠法器", "宗门建筑", "古代宫殿", "水墨仙境", "赛博朋克霓虹泛滥"],
             ),
             "character_visual_rules": CharacterVisualRules(
-                face_style="东方古典面容",
-                face_style_en="Eastern classical face",
-                body_proportion="标准比例",
-                clothing_system="符合时代背景的服饰",
-                clothing_materials="丝绸、棉麻",
-                hair_style_rules="符合时代背景的发型",
-                accessory_rules="简约配饰",
+                face_style="现代东亚写实面孔",
+                face_style_en="Modern East Asian realistic face",
+                body_proportion="真实自然比例，避免夸张游戏化造型",
+                clothing_system="现代日常服、户外防护服、临时拼接的生存装备",
+                clothing_materials="棉布、尼龙、防水布、皮革、塑料、金属扣件",
+                hair_style_rules="现代发型，灾变环境下可凌乱、油污、缺乏打理",
+                accessory_rules="背包、手电、口罩、绷带、工具、简易防护装备",
             ),
             "scene_visual_rules": SceneVisualRules(
-                architecture_style="古典中式建筑",
-                landscape_style="山水意境",
-                interior_style="简约雅致",
-                weather_patterns="多变天气",
+                architecture_style="现代城市建筑、小区、街道、医院、商场、地下空间，可呈现破败损毁",
+                landscape_style="现代城市废墟、封锁道路、荒废街区、临时避难点",
+                interior_style="现代住宅、办公室、超市、医院内部，断电后的杂乱与应急布置",
+                weather_patterns="阴天、雾霾、雨后潮湿、灰尘弥漫、低能见度",
             ),
             "item_visual_rules": ItemVisualRules(
-                weapon_style="古典风格",
-                material_system="金属、木质",
-                craftsmanship="精细工艺",
+                weapon_style="现代工具、简易冷兵器、消防斧、撬棍、临时改造装备",
+                material_system="金属、塑料、橡胶、玻璃、混凝土、织物",
+                craftsmanship="工业量产品与临时改造痕迹并存",
             ),
         }

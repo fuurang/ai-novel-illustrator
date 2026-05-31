@@ -1,4 +1,20 @@
-const API_BASE = 'http://localhost:8000/api'
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
+const ASSET_BASE = API_BASE.replace(/\/api\/?$/, '')
+
+function normalizeAssetUrl(url?: string) {
+  if (!url) return url
+  if (/^https?:\/\//i.test(url)) return url
+  if (url.startsWith('/output/') || url.startsWith('/legacy-output/')) return `${ASSET_BASE}${url}`
+  return url
+}
+
+function normalizeEntity(entity: any) {
+  return {
+    ...entity,
+    image_url: normalizeAssetUrl(entity?.image_url),
+    locked_image_url: normalizeAssetUrl(entity?.locked_image_url),
+  }
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {}
@@ -56,12 +72,13 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(options || {}),
       }),
-    runStage: (projectId: string, stage: string, chapterIndices?: number[]) =>
+    runStage: (projectId: string, stage: string, chapterIndices?: number[], options?: any) =>
       request<any>(`/projects/${projectId}/pipeline`, {
         method: 'POST',
         body: JSON.stringify({
           stages: [stage],
           chapter_indices: chapterIndices || undefined,
+          ...(options || {}),
         }),
       }),
     status: (projectId: string) =>
@@ -94,16 +111,55 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ groups }),
       }),
+    segmentOne: (projectId: string, startChapter?: number, granularity: string = 'medium') =>
+      request<any>(`/projects/${projectId}/scene-groups/segment-one`, {
+        method: 'POST',
+        body: JSON.stringify({ start_chapter: startChapter, granularity }),
+      }),
+    add: (projectId: string, group: any) =>
+      request<any>(`/projects/${projectId}/scene-groups/add`, {
+        method: 'POST',
+        body: JSON.stringify(group),
+      }),
+  },
+  ai: {
+    tasks: async (projectId: string) => {
+      const res = await request<{ tasks: any[] }>(`/projects/${projectId}/ai/tasks`)
+      return res.tasks || []
+    },
+    attachments: async (projectId: string) => {
+      const res = await request<{ attachments: any[] }>(`/projects/${projectId}/ai/attachments`)
+      return res.attachments || []
+    },
+    runs: async (projectId: string, limit = 30) => {
+      const res = await request<{ runs: any[] }>(`/projects/${projectId}/ai/runs?limit=${limit}`)
+      return res.runs || []
+    },
+    prepare: (projectId: string, data: any) =>
+      request<any>(`/projects/${projectId}/ai/prepare`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    run: (projectId: string, data: any) =>
+      request<any>(`/projects/${projectId}/ai/run`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    apply: (projectId: string, runId: string) =>
+      request<any>(`/projects/${projectId}/ai/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ run_id: runId }),
+      }),
   },
   entities: {
     list: async (projectId: string, type?: string) => {
       const res = await request<{ entities: any[]; total: number }>(
         `/projects/${projectId}/entities${type ? `?type=${type}` : ''}`
       )
-      return res.entities || []
+      return (res.entities || []).map(normalizeEntity)
     },
     get: (projectId: string, entityId: string) =>
-      request<any>(`/projects/${projectId}/entities/${entityId}`),
+      request<any>(`/projects/${projectId}/entities/${entityId}`).then(normalizeEntity),
     update: (projectId: string, entityId: string, data: any) =>
       request<any>(`/projects/${projectId}/entities/${entityId}`, {
         method: 'PUT',
@@ -130,7 +186,7 @@ export const api = {
       )
       return (res.images || []).map((img: any) => ({
         ...img,
-        url: img.path || img.url,
+        url: normalizeAssetUrl(img.path || img.url),
         name: img.filename || img.name,
       }))
     },
@@ -141,6 +197,11 @@ export const api = {
       }),
     generateSingle: (projectId: string, entityId: string) =>
       request<any>(`/projects/${projectId}/generate/${entityId}`, { method: 'POST' }),
+    lock: (projectId: string, entityId: string, locked: boolean) =>
+      request<any>(`/projects/${projectId}/images/${entityId}/lock`, {
+        method: 'POST',
+        body: JSON.stringify({ locked }),
+      }),
   },
   settings: {
     get: () => request<any>('/settings'),

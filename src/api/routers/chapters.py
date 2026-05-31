@@ -5,10 +5,15 @@ import json
 from pathlib import Path
 
 from src.storage.project_store import ProjectStore
+from src.api.image_paths import get_project_images_dir, get_project_output_dir, image_url
+from src.llm.adapter import LLMAdapter
+from src.llm.prompt_loader import PromptLoader
 
 router = APIRouter()
 
 store = ProjectStore()
+SCENE_SEGMENT_BATCH_CHAPTERS = 12
+SCENE_SEGMENT_MAX_INTERNAL_ROUNDS = 20
 
 
 class SceneGroupRequest(BaseModel):
@@ -19,6 +24,48 @@ class SceneGroupRequest(BaseModel):
 
 class SceneGroupUpdateRequest(BaseModel):
     groups: list[dict]
+
+
+class SceneSegmentationRequest(BaseModel):
+    start_chapter: Optional[int] = None
+    max_chapters: Optional[int] = None
+    granularity: str = "medium"
+
+
+SCENE_GRANULARITY = {
+    "fine": {
+        "label": "细",
+        "instruction": "细粒度：倾向于把地点、目标、冲突或时间状态稍有明显变化的段落拆开；允许只分 1-3 章，适合城市探索、楼层推进、副本小关卡。",
+    },
+    "medium": {
+        "label": "中",
+        "instruction": "中粒度：按主要剧情阶段分段；只有主要空间、行动目标、危险来源或阶段状态明显变化时才切换。",
+    },
+    "coarse": {
+        "label": "粗",
+        "instruction": "粗粒度：倾向于合并同一大地图/大副本/长行动线中的连续章节；只有进入新的大地图、新副本、新长期目标或世界规则变化时才切换。",
+    },
+}
+
+
+def scene_granularity_config(granularity: str, max_chapters: int | None = None) -> dict:
+    return dict(SCENE_GRANULARITY.get(granularity, SCENE_GRANULARITY["medium"]))
+
+
+_llm_adapter = None
+_prompt_loader = None
+
+
+def get_llm_adapter():
+    global _llm_adapter, _prompt_loader
+    if _llm_adapter is None:
+        import yaml
+        config_path = Path(__file__).parent.parent.parent / "config" / "default.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        _llm_adapter = LLMAdapter(config)
+        _prompt_loader = PromptLoader(config.get('prompts_dir', 'config/prompts'))
+    return _llm_adapter, _prompt_loader
 
 
 @router.get("/{project_id}/chapters")
@@ -104,11 +151,10 @@ async def get_chapter(project_id: str, chapter_number: int):
                 matched_entities.append(e)
 
     images = []
-    project_dir = store.get_project_dir(project_id)
-    images_dir = project_dir / "images"
+    images_dir = get_project_images_dir(project_id)
     if images_dir.exists():
         for image_path in images_dir.rglob("*.png"):
-            relative = image_path.relative_to(project_dir)
+            relative = image_path.relative_to(get_project_output_dir(project_id))
             parts = relative.parts
             category = "other"
             entity_id = None
@@ -128,7 +174,7 @@ async def get_chapter(project_id: str, chapter_number: int):
                     entity_id = stem.replace("_variation", "").replace("_v2", "")
 
             image_info = {
-                "path": f"/output/{project_id}/{str(relative).replace(chr(92), '/')}",
+                "path": image_url(project_id, image_path),
                 "filename": image_path.name,
                 "category": category,
                 "entity_id": entity_id,
@@ -189,6 +235,83 @@ def parse_chapter_range(range_str: str) -> list[int]:
     return sorted(list(set(chapters)))
 
 
+def get_chapter_number(chapter: dict, fallback: int = 0) -> int:
+    return int(chapter.get("number", chapter.get("chapter_number", chapter.get("index", fallback))) or fallback)
+
+
+def select_chapters_from_number(chapters: list[dict], start_chapter: int) -> list[dict]:
+    return [
+        chapter for chapter in chapters
+        if get_chapter_number(chapter) >= start_chapter
+    ]
+
+
+def chapter_context(chapters: list[dict]) -> list[dict]:
+    return [
+        {
+            'number': get_chapter_number(chapter, i + 1),
+            'title': chapter.get('title', f'第{i + 1}章'),
+            'text': chapter.get('text', ''),
+        }
+        for i, chapter in enumerate(chapters)
+    ]
+
+
+def slice_chapter_batch(chapters: list[dict], offset: int) -> list[dict]:
+    return chapters[offset:offset + SCENE_SEGMENT_BATCH_CHAPTERS]
+
+
+def group_end_chapter(group: dict) -> int:
+    chapters = group.get("chapters") or []
+    if chapters:
+        try:
+            return max(int(chapter) for chapter in chapters)
+        except Exception:
+            pass
+
+    parsed = parse_chapter_range(group.get("chapter_range", ""))
+    return max(parsed) if parsed else 0
+
+
+def group_start_chapter(group: dict) -> int:
+    chapters = group.get("chapters") or []
+    if chapters:
+        try:
+            return min(int(chapter) for chapter in chapters)
+        except Exception:
+            pass
+
+    parsed = parse_chapter_range(group.get("chapter_range", ""))
+    return min(parsed) if parsed else 0
+
+
+def confirmed_scene_groups(groups: list[dict]) -> list[dict]:
+    return [
+        group for group in groups
+        if group.get("source") in {"ai", "manual"}
+    ]
+
+
+def next_scene_start_chapter(chapters: list[dict], groups: list[dict]) -> int:
+    chapter_numbers = sorted(
+        get_chapter_number(chapter, index + 1)
+        for index, chapter in enumerate(chapters)
+    )
+    if not chapter_numbers:
+        return 1
+
+    cursor = chapter_numbers[0]
+    for group in sorted(confirmed_scene_groups(groups), key=group_start_chapter):
+        start = group_start_chapter(group)
+        end = group_end_chapter(group)
+        if start <= cursor <= end:
+            cursor = end + 1
+        elif start > cursor:
+            break
+
+    return cursor
+
+
 @router.get("/{project_id}/scene-groups")
 async def list_scene_groups(project_id: str):
     if not store.project_exists(project_id):
@@ -238,21 +361,149 @@ async def auto_detect_scene_groups(project_id: str):
                 }
                 groups.append(group)
     
-    # 如果没有场景实体或分组，就按章节间隔自动分组（每5章一组）
+    # 不再按固定章节数生成“假场景”。场景分段必须由 AI 或用户确认产生；
+    # 固定 5 章切块会误导后续实体提取和提示词生成。
     if not groups:
-        total_chapters = len(chapters)
-        group_size = 5
-        for i in range(0, total_chapters, group_size):
-            start_chapter = i + 1
-            end_chapter = min(i + group_size, total_chapters)
-            group = {
-                "id": f"group_{i}",
-                "name": f"场景区域 {i//group_size + 1}",
-                "chapter_range": f"{start_chapter}-{end_chapter}",
-                "chapters": list(range(start_chapter, end_chapter + 1)),
-                "description": f"第 {start_chapter} 至 {end_chapter} 章的场景"
-            }
-            groups.append(group)
+        existing_groups = load_scene_groups(project_id)
+        return {
+            "groups": existing_groups,
+            "total": len(existing_groups),
+            "message": "未发现可自动转换的场景实体；请使用智能分场景逐段识别。",
+        }
     
+    save_scene_groups(project_id, groups)
+    return {"groups": groups, "total": len(groups)}
+
+
+@router.post("/{project_id}/scene-groups/segment-one")
+async def segment_one_scene(project_id: str, request: SceneSegmentationRequest):
+    """智能识别下一个完整场景。"""
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    chapters = store.load_chapters(project_id)
+    if not chapters:
+        return {"scene": None, "message": "没有章节数据"}
+
+    project = store.load_project_info(project_id) or {}
+    existing_groups = load_scene_groups(project_id)
+    start_chapter = request.start_chapter or next_scene_start_chapter(chapters, existing_groups)
+    granularity = scene_granularity_config(request.granularity, request.max_chapters)
+    last_chapter_number = max(
+        get_chapter_number(chapter, index + 1)
+        for index, chapter in enumerate(chapters)
+    )
+    if start_chapter > last_chapter_number:
+        return {
+            "scene": None,
+            "message": "所有章节都已经完成场景分段",
+            "start_chapter": start_chapter,
+            "next_start_chapter": start_chapter,
+        }
+
+    existing_scenes_text = "\n".join([
+        f"- {group.get('name', '')}: 第{group.get('chapter_range', '')}章"
+        for group in confirmed_scene_groups(existing_groups)
+    ]) or "（暂无已确认场景）"
+
+    chapters_to_analyze = select_chapters_from_number(chapters, start_chapter)
+    if not chapters_to_analyze:
+        return {
+            "scene": None,
+            "message": "没有更多章节需要分析",
+            "start_chapter": start_chapter,
+            "next_start_chapter": start_chapter,
+        }
+
+    llm_adapter, prompt_loader = get_llm_adapter()
+    base_context = {
+        "novel_title": project.get('novel_title', project.get('novel_name', project.get('name', '小说'))),
+        "start_chapter": start_chapter,
+        "granularity_label": granularity["label"],
+        "granularity_instruction": granularity["instruction"],
+        "existing_scenes": existing_scenes_text,
+    }
+
+    try:
+        result = {}
+        analyzed_chapters = []
+        for round_index in range(SCENE_SEGMENT_MAX_INTERNAL_ROUNDS):
+            offset = round_index * SCENE_SEGMENT_BATCH_CHAPTERS
+            batch = slice_chapter_batch(chapters_to_analyze, offset)
+            if not batch:
+                break
+
+            analyzed_chapters.extend(batch)
+            context = {
+                **base_context,
+                "last_available_chapter": get_chapter_number(analyzed_chapters[-1]),
+                "available_chapter_count": len(chapters_to_analyze),
+                "has_more_chapters": offset + len(batch) < len(chapters_to_analyze),
+                "chapters": chapter_context(analyzed_chapters),
+            }
+            system_prompt, prompt = prompt_loader.render('scene_segmentation', context)
+            if system_prompt:
+                prompt = f"{system_prompt}\n\n{prompt}"
+            result = await llm_adapter.generate_json_async(prompt)
+            scene_data = result.get('scene', {})
+            analysis = result.get('analysis', {})
+            if scene_data and (not analysis.get('needs_more_chapters') or not context["has_more_chapters"]):
+                break
+
+        scene_data = result.get('scene', {})
+        if not scene_data:
+            return {
+                "scene": None,
+                "message": "未识别到完整场景",
+                "start_chapter": start_chapter,
+                "next_start_chapter": start_chapter,
+            }
+
+        analyzed_max = max(
+            get_chapter_number(chapter, index + 1)
+            for index, chapter in enumerate(analyzed_chapters or chapters_to_analyze)
+        )
+        start_ch = int(scene_data.get('start_chapter', start_chapter) or start_chapter)
+        end_ch = int(scene_data.get('end_chapter', start_chapter) or start_chapter)
+        if start_ch != start_chapter:
+            start_ch = start_chapter
+        if end_ch < start_ch:
+            end_ch = start_ch
+        if end_ch > analyzed_max:
+            end_ch = analyzed_max
+
+        new_group = {
+            "id": f"scene_{start_ch}_{end_ch}",
+            "name": scene_data.get('name', f'场景 {start_ch}-{end_ch}'),
+            "chapter_range": f"{start_ch}-{end_ch}",
+            "chapters": list(range(start_ch, end_ch + 1)),
+            "description": scene_data.get('description', ''),
+            "confidence": scene_data.get('confidence', 0.8),
+            "reasoning": result.get('analysis', {}).get('reasoning', '') or result.get('readable_report', ''),
+            "granularity": request.granularity,
+            "internal_read_rounds": result.get('analysis', {}).get('internal_read_rounds', 1),
+            "source": "ai",
+        }
+
+        return {
+            "scene": new_group,
+            "analysis": result.get('analysis', {}),
+            "start_chapter": start_chapter,
+            "next_start_chapter": end_ch + 1
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"场景识别失败: {str(e)}")
+
+
+@router.post("/{project_id}/scene-groups/add")
+async def add_scene_group(project_id: str, group: dict):
+    """添加一个场景分组（用户确认后调用）"""
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    groups = load_scene_groups(project_id)
+    group.setdefault('id', f'scene_{len(groups) + 1}')
+    group.setdefault('source', 'manual')
+    groups.append(group)
     save_scene_groups(project_id, groups)
     return {"groups": groups, "total": len(groups)}

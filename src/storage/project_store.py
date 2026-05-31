@@ -126,6 +126,31 @@ class ProjectStore:
         with open(wb_file, 'r', encoding='utf-8') as f:
             return json.load(f)
 
+    def save_ai_runs(self, project_id: str, runs: List[Dict[str, Any]]) -> None:
+        """保存 AI 交互记录"""
+        runs_file = self.base_dir / project_id / "data" / "ai_runs.json"
+        runs_file.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(runs_file, 'w', encoding='utf-8') as f:
+            json.dump(runs, f, ensure_ascii=False, indent=2)
+
+    def load_ai_runs(self, project_id: str) -> List[Dict[str, Any]]:
+        """加载 AI 交互记录"""
+        runs_file = self.base_dir / project_id / "data" / "ai_runs.json"
+
+        if not runs_file.exists():
+            return []
+
+        with open(runs_file, 'r', encoding='utf-8') as f:
+            return json.load(f)
+
+    def append_ai_run(self, project_id: str, run: Dict[str, Any]) -> Dict[str, Any]:
+        """追加一条 AI 交互记录"""
+        runs = self.load_ai_runs(project_id)
+        runs.insert(0, run)
+        self.save_ai_runs(project_id, runs[:200])
+        return run
+
     def save_chapters(
         self,
         project_id: str,

@@ -104,9 +104,7 @@ class FaceAnchorGenerator:
                 "world_bible_face_style": world_bible.character_visual_rules.face_style,
             })
             
-            import asyncio
-            loop = asyncio.get_event_loop()
-            result = loop.run_until_complete(self.llm.generate_json(user, system))
+            result = self.llm.generate_json(user, system)
             return result.get("chinese_prompt", character_prompt.chinese_prompt)
         except FileNotFoundError:
             return character_prompt.chinese_prompt

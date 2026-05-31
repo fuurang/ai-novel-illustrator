@@ -27,6 +27,8 @@ from src.core.attribute_builder import AttributeBuilder
 from src.core.prompt_generator import PromptGenerator
 from src.core.face_anchor import FaceAnchorGenerator
 from src.core.image_generator import ImageGenerator
+from src.render.chatgpt2api_backend import ChatGPT2APIBackend
+from src.api.image_paths import get_project_images_dir
 
 from src.storage.project_store import ProjectStore
 from src.llm.adapter import LLMAdapter
@@ -95,6 +97,7 @@ class Pipeline:
 
         self._llm_adapter: Optional[LLMAdapter] = None
         self._prompt_loader: Optional[PromptLoader] = None
+        self.api_mode = False
 
     def _init_components(self) -> None:
         """初始化所有组件"""
@@ -144,6 +147,19 @@ class Pipeline:
                 self._prompt_loader,
                 config=prompt_config
             )
+
+        image_config = self.config.get("image", {})
+        if image_config.get("enabled") and image_config.get("backend") == "chatgpt2api":
+            backend_config = image_config.get("chatgpt2api", {})
+            image_backend = ChatGPT2APIBackend(backend_config)
+            if self._image_generator is None:
+                self._image_generator = ImageGenerator(image_backend, self.config)
+            if self._face_anchor_generator is None and self._llm_adapter and self._prompt_loader:
+                self._face_anchor_generator = FaceAnchorGenerator(
+                    self._llm_adapter,
+                    self._prompt_loader,
+                    image_backend,
+                )
 
     def add_component(self, name: str, component: Any) -> None:
         """
@@ -218,12 +234,14 @@ class Pipeline:
             self.project_store.create_project(project_id, project_name, self.config)
 
         context = PipelineContext(project=project)
+        self._hydrate_context_from_store(context)
 
-        console.print(Panel.fit(
-            f"[bold cyan]AI拆书生图流水线[/bold cyan]\n"
-            f"项目: {project_name} ({project_id})",
-            border_style="cyan"
-        ))
+        if not self.api_mode:
+            console.print(Panel.fit(
+                f"[bold cyan]AI拆书生图流水线[/bold cyan]\n"
+                f"项目: {project_name} ({project_id})",
+                border_style="cyan"
+            ))
 
         stage_descriptions = {
             "preprocess": "预处理：读取文件并分割章节",
@@ -235,14 +253,26 @@ class Pipeline:
             "illustrate": "生成图片",
         }
 
-        with Progress(
+        progress_context = None if self.api_mode else Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
             TimeRemainingColumn(),
             console=console,
-        ) as progress:
+        )
+
+        if progress_context is None:
+            class _NoopProgress:
+                task_ids: list[int] = []
+                def add_task(self, *args, **kwargs): return 0
+                def update(self, *args, **kwargs): pass
+                def advance(self, *args, **kwargs): pass
+                def __enter__(self): return self
+                def __exit__(self, *args): return False
+            progress_context = _NoopProgress()
+
+        with progress_context as progress:
             main_task = progress.add_task("[cyan]流水线执行中...", total=None)
 
             if "preprocess" in stages:
@@ -287,13 +317,58 @@ class Pipeline:
                     return None
                 progress.advance(main_task)
 
+            if "face_anchor" in stages and context and enable_image:
+                progress.update(main_task, description="[cyan]生成面部锚定图")
+                await self._stage_face_anchor(context, progress)
+                progress.advance(main_task)
+
+            if "character_image" in stages and context and enable_image:
+                progress.update(main_task, description="[cyan]生成角色图")
+                await self._stage_character_image(context, progress)
+                progress.advance(main_task)
+
+            if "scene_image" in stages and context and enable_image:
+                progress.update(main_task, description="[cyan]生成场景图")
+                await self._stage_scene_image(context, progress)
+                progress.advance(main_task)
+
+            if "item_image" in stages and context and enable_image:
+                progress.update(main_task, description="[cyan]生成物品图")
+                await self._stage_item_image(context, progress)
+                progress.advance(main_task)
+
             if "illustrate" in stages and context and enable_image:
                 progress.update(main_task, description=f"[cyan]图片生成: {stage_descriptions.get('illustrate', '生成图片')}")
                 await self._stage_illustrate(context, progress)
                 progress.advance(main_task)
 
-        self._display_summary(context)
+        if not self.api_mode:
+            self._display_summary(context)
         return context
+
+    def _hydrate_context_from_store(self, context: PipelineContext) -> None:
+        if not self.project_store.project_exists(context.project.id):
+            return
+
+        chapters_data = self.project_store.load_chapters(context.project.id)
+        if chapters_data and not context.chapters:
+            context.chapters = [Chapter(**chapter) for chapter in chapters_data]
+            context.text = "\n\n".join(chapter.text for chapter in context.chapters)
+
+        entities_data = self.project_store.load_entities(context.project.id)
+        if entities_data and not context.entities:
+            context.entities = [Entity(**entity) for entity in entities_data]
+
+        prompts_data = self.project_store.load_prompts(context.project.id)
+        if prompts_data and not context.prompts:
+            context.prompts = [Prompt(**prompt) for prompt in prompts_data]
+
+        try:
+            world_bible_data = self.project_store.load_world_bible(context.project.id)
+            if world_bible_data and context.world_bible is None:
+                context.world_bible = WorldBible(**world_bible_data)
+        except FileNotFoundError:
+            pass
 
     async def _stage_preprocess(
         self,
@@ -764,17 +839,119 @@ class Pipeline:
         """阶段7：生成图片"""
         start_time = time.time()
 
-        console.print("[yellow]![/yellow] 图片生成需要配置后端，当前跳过")
+        if self._image_generator is None:
+            result = StageResult(
+                stage="illustrate",
+                success=False,
+                error="生图后端未初始化，请检查 image.enabled、backend 和 API Key",
+                duration=time.time() - start_time,
+            )
+            context.stage_results["illustrate"] = result
+            return {"error": result.error}
 
+        if not context.prompts:
+            prompt_data = self.project_store.load_prompts(context.project.id)
+            context.prompts = [Prompt(**prompt) for prompt in prompt_data]
+        if not context.entities:
+            entity_data = self.project_store.load_entities(context.project.id)
+            context.entities = [Entity(**entity) for entity in entity_data]
+        if context.world_bible is None:
+            try:
+                context.world_bible = WorldBible(**self.project_store.load_world_bible(context.project.id))
+            except FileNotFoundError:
+                context.world_bible = WorldBible(project_id=context.project.id)
+
+        if not context.prompts:
+            result = StageResult(
+                stage="illustrate",
+                success=False,
+                error="缺少绘图提示词，请先生成提示词",
+                duration=time.time() - start_time,
+            )
+            context.stage_results["illustrate"] = result
+            return {"error": result.error}
+
+        images_dir = get_project_images_dir(context.project.id)
+        results = await self._image_generator.generate_all(
+            entities=context.entities,
+            prompts=context.prompts,
+            world_bible=context.world_bible or WorldBible(),
+            face_anchor_dir=str(images_dir / "face_anchors"),
+            output_dir=str(images_dir),
+        )
         result = StageResult(
             stage="illustrate",
             success=True,
-            data={"message": "图片生成跳过（未配置后端）"},
+            data=results,
             duration=time.time() - start_time,
         )
         context.stage_results["illustrate"] = result
 
-        return {"message": "图片生成跳过"}
+        return results
+
+    async def _stage_face_anchor(self, context: PipelineContext, progress: Progress = None) -> Dict[str, Any]:
+        start_time = time.time()
+        if self._face_anchor_generator is None:
+            result = StageResult("face_anchor", False, error="面部锚定生成器未初始化", duration=time.time() - start_time)
+            context.stage_results["face_anchor"] = result
+            return {"error": result.error}
+        if not context.prompts:
+            context.prompts = [Prompt(**prompt) for prompt in self.project_store.load_prompts(context.project.id)]
+        if not context.entities:
+            context.entities = [Entity(**entity) for entity in self.project_store.load_entities(context.project.id)]
+        if context.world_bible is None:
+            context.world_bible = WorldBible(**self.project_store.load_world_bible(context.project.id))
+
+        images_dir = get_project_images_dir(context.project.id)
+        prompts = {prompt.entity_id: prompt for prompt in context.prompts if prompt.type == "character"}
+        characters = [entity for entity in context.entities if entity.type == EntityType.CHARACTER and entity.id in prompts]
+        results = await self._face_anchor_generator.batch_generate(
+            characters,
+            list(prompts.values()),
+            context.world_bible,
+            str(images_dir),
+        )
+        context.stage_results["face_anchor"] = StageResult("face_anchor", True, data=results, duration=time.time() - start_time)
+        return results
+
+    async def _stage_character_image(self, context: PipelineContext, progress: Progress = None) -> Dict[str, Any]:
+        return await self._stage_illustrate_filtered(context, "character_image", {EntityType.CHARACTER})
+
+    async def _stage_scene_image(self, context: PipelineContext, progress: Progress = None) -> Dict[str, Any]:
+        return await self._stage_illustrate_filtered(context, "scene_image", {EntityType.SCENE})
+
+    async def _stage_item_image(self, context: PipelineContext, progress: Progress = None) -> Dict[str, Any]:
+        return await self._stage_illustrate_filtered(context, "item_image", {EntityType.ITEM})
+
+    async def _stage_illustrate_filtered(self, context: PipelineContext, stage: str, entity_types: set[EntityType]) -> Dict[str, Any]:
+        start_time = time.time()
+        if self._image_generator is None:
+            result = StageResult(stage, False, error="生图后端未初始化", duration=time.time() - start_time)
+            context.stage_results[stage] = result
+            return {"error": result.error}
+        if not context.prompts:
+            context.prompts = [Prompt(**prompt) for prompt in self.project_store.load_prompts(context.project.id)]
+        if not context.entities:
+            context.entities = [Entity(**entity) for entity in self.project_store.load_entities(context.project.id)]
+        if context.world_bible is None:
+            try:
+                context.world_bible = WorldBible(**self.project_store.load_world_bible(context.project.id))
+            except FileNotFoundError:
+                context.world_bible = WorldBible(project_id=context.project.id)
+
+        entities = [entity for entity in context.entities if entity.type in entity_types]
+        entity_ids = {entity.id for entity in entities}
+        prompts = [prompt for prompt in context.prompts if prompt.entity_id in entity_ids]
+        images_dir = get_project_images_dir(context.project.id)
+        results = await self._image_generator.generate_all(
+            entities=entities,
+            prompts=prompts,
+            world_bible=context.world_bible or WorldBible(),
+            face_anchor_dir=str(images_dir / "face_anchors"),
+            output_dir=str(images_dir),
+        )
+        context.stage_results[stage] = StageResult(stage, True, data=results, duration=time.time() - start_time)
+        return results
 
     def _display_summary(self, context: PipelineContext) -> None:
         """显示流水线执行摘要"""

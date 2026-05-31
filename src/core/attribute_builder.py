@@ -79,7 +79,7 @@ class AttributeBuilder:
                     "world_bible_visual_rules": json.dumps(visual_rules, ensure_ascii=False),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 
                 entity.attributes = result.get("attributes", {})
                 entity.world_binding = WorldBinding(
@@ -117,7 +117,7 @@ class AttributeBuilder:
                     "world_bible_scene_rules": json.dumps(wb.scene_visual_rules.model_dump(), ensure_ascii=False),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 entity.attributes = result.get("attributes", {})
                 return entity
                 
@@ -146,7 +146,7 @@ class AttributeBuilder:
                     "world_bible_item_rules": json.dumps(wb.item_visual_rules.model_dump(), ensure_ascii=False),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 entity.attributes = result.get("attributes", {})
                 return entity
                 

@@ -27,6 +27,7 @@ class EntityExtractor:
         self.config = config or {}
         self.max_retries = self.config.get("max_retries", 3)
         self.entity_confidence_threshold = self.config.get("entity_confidence_threshold", 0.7)
+        self.extraction_level = self.config.get("extraction_level", "balanced")
     
     async def extract_from_chapter(
         self,
@@ -59,6 +60,8 @@ class EntityExtractor:
                     "chapter_text": chapter_text,
                     "world_bible_summary": wb_summary,
                     "existing_entities": existing_str,
+                    "extraction_level": self.extraction_level,
+                    "extraction_level_instruction": self._extraction_level_instruction(self.extraction_level),
                 })
                 
                 result = await self.llm.generate_json(user_prompt, system_prompt)
@@ -76,6 +79,27 @@ class EntityExtractor:
                     return []
         
         return []
+
+    def _extraction_level_instruction(self, level: str) -> str:
+        level = (level or "balanced").lower()
+        instructions = {
+            "all": (
+                "【提取档位：全部】\n"
+                "尽量完整提取本章所有可复用出图对象：有名角色、可识别身份的无名角色、明确地点/空间、"
+                "有视觉特征或剧情用途的物品都要列出。宁可略多，但仍必须有原文依据，禁止臆造。"
+            ),
+            "balanced": (
+                "【提取档位：适中】\n"
+                "提取本章有稳定复用价值或画面表现价值的对象：主要/次要角色、当前主要场景、"
+                "推动情节或具有辨识度的物品。路人、一次性泛称地点、普通背景杂物不提取。"
+            ),
+            "key": (
+                "【提取档位：关键】\n"
+                "只提取影响剧情理解、后续反复出现、或本章必须出图的关键对象：核心角色、关键场景、"
+                "关键道具。临时人物、过场地点、普通物品全部忽略。"
+            ),
+        }
+        return instructions.get(level, instructions["balanced"])
     
     def _summarize_world_bible(self, wb: WorldBible) -> str:
         """

@@ -264,6 +264,50 @@ class LLMAdapter:
         
         return self._parse_json_response(content)
 
+    async def generate_json_with_raw_async(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        json_schema: Optional[Dict[str, Any]] = None,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """异步生成 JSON，同时返回模型原始输出，便于调试和人工追问。"""
+        client = self._get_client()
+
+        base_system = "你是一个专业的JSON生成器。请始终只输出有效的JSON，不要包含任何其他文字。"
+
+        if json_schema:
+            schema_str = json.dumps(json_schema, ensure_ascii=False, indent=2)
+            final_system_prompt = f"{base_system}\n\n请严格按照以下JSON Schema生成：\n{schema_str}"
+        elif system_prompt:
+            final_system_prompt = f"{base_system}\n\n{system_prompt}"
+        else:
+            final_system_prompt = base_system
+
+        messages = [
+            {"role": "system", "content": final_system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
+        response = await client.acompletion(
+            model=model or self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self.max_tokens,
+            api_key=self.api_key,
+            base_url=self.base_url,
+            **kwargs
+        )
+
+        raw_content = response['choices'][0]['message']['content']
+        return {
+            "raw_output": raw_content,
+            "parsed_output": self._parse_json_response(raw_content),
+            "system_prompt": final_system_prompt,
+            "user_prompt": prompt,
+        }
+
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """解析JSON响应
         

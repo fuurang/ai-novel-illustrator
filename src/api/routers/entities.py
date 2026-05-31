@@ -4,10 +4,73 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.storage.project_store import ProjectStore
+from src.api.image_paths import candidate_image_paths, image_url
 
 router = APIRouter()
 
 store = ProjectStore()
+
+
+def _entity_image_url(project_id: str, entity: dict) -> Optional[str]:
+    locked_path = entity.get("locked_image_path")
+    if entity.get("image_locked") and locked_path:
+        locked_image_path = store.get_project_dir(project_id) / locked_path
+        if locked_image_path.exists():
+            return image_url(project_id, locked_image_path)
+
+    category_dirs = {
+        "character": "characters",
+        "scene": "scenes",
+        "item": "items",
+        "creature": "characters",
+    }
+    image_dir = category_dirs.get(entity.get("type", ""))
+    if not image_dir:
+        return None
+
+    entity_id = entity.get("id", "")
+    candidates = candidate_image_paths(project_id, image_dir, f"{entity_id}.png")
+    if entity.get("type") in {"character", "creature"}:
+        candidates.extend(candidate_image_paths(project_id, "scenes", f"{entity_id}.png"))
+
+    image_path = next((path for path in candidates if path.exists()), None)
+    if image_path is None:
+        return None
+
+    return image_url(project_id, image_path)
+
+
+def _attach_image_url(project_id: str, entity: dict) -> dict:
+    entity = dict(entity)
+    image_url = _entity_image_url(project_id, entity)
+    if image_url:
+        entity["image_url"] = image_url
+        entity["image_status"] = "completed"
+    if entity.get("image_locked") and image_url:
+        entity["locked_image_url"] = image_url
+    return entity
+
+
+def _prompt_by_entity_id(project_id: str) -> dict[str, dict]:
+    prompts = store.load_prompts(project_id)
+    result = {}
+    for prompt in prompts:
+        entity_id = prompt.get("entity_id")
+        if entity_id and entity_id not in result:
+            result[entity_id] = prompt
+    return result
+
+
+def _attach_prompt(project_id: str, entity: dict, prompt_map: Optional[dict[str, dict]] = None) -> dict:
+    entity = dict(entity)
+    prompt_map = prompt_map if prompt_map is not None else _prompt_by_entity_id(project_id)
+    prompt = prompt_map.get(entity.get("id", ""))
+    if prompt:
+        entity["drawing_prompt"] = prompt.get("chinese_prompt", "")
+        entity["negative_prompt"] = prompt.get("negative_prompt", "")
+        entity["prompt_id"] = prompt.get("id", "")
+        entity["prompt_created_at"] = prompt.get("created_at", "")
+    return entity
 
 
 class EntityUpdateRequest(BaseModel):
@@ -58,6 +121,9 @@ async def list_entities(
                             break
         entities = filtered
 
+    prompt_map = _prompt_by_entity_id(project_id)
+    entities = [_attach_prompt(project_id, _attach_image_url(project_id, entity), prompt_map) for entity in entities]
+
     return {"entities": entities, "total": len(entities)}
 
 
@@ -73,7 +139,7 @@ async def get_entity(project_id: str, entity_id: str):
             entity.setdefault("chapter_appearances", [])
             entity.setdefault("chapter_range", "")
             entity.setdefault("chapter_images", {})
-            return entity
+            return _attach_prompt(project_id, _attach_image_url(project_id, entity))
 
     raise HTTPException(status_code=404, detail=f"实体不存在: {entity_id}")
 

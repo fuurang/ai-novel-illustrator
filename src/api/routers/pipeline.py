@@ -23,6 +23,7 @@ class PipelineRequest(BaseModel):
     enable_image: bool = False
     chapter_range: Optional[str] = None
     chapter_indices: Optional[List[int]] = None
+    extraction_level: Optional[str] = None
 
 
 def _get_project_input_file(project_id: str) -> str:
@@ -64,18 +65,19 @@ async def _run_pipeline_task(project_id: str, config: dict, request: PipelineReq
 
         input_file = _get_project_input_file(project_id)
         pipeline = Pipeline(config, store)
+        pipeline.api_mode = True
 
         stages = request.stages
         if stages is None:
             stages = ["preprocess", "world_bible", "extract", "merge", "attribute", "prompt"]
 
         stage_names = {
-            "preprocess": "预处理",
+            "preprocess": "整理原文",
             "world_bible": "世界观构建",
-            "extract": "实体提取",
-            "merge": "实体合并",
-            "attribute": "属性构建",
-            "prompt": "提示词生成",
+            "extract": "识别出图对象",
+            "merge": "合并重复对象",
+            "attribute": "整理视觉设定",
+            "prompt": "生成绘图指令",
             "illustrate": "图片生成",
             "face_anchor": "面部锚定图",
             "character_image": "角色全身图",
@@ -121,6 +123,18 @@ async def _run_pipeline_task(project_id: str, config: dict, request: PipelineReq
                 }
                 return
 
+            stage_result = context.stage_results.get(stage)
+            if stage_result and not stage_result.success:
+                _pipeline_status[project_id] = {
+                    "is_running": False,
+                    "current_stage": stage_names.get(stage, stage),
+                    "current_stage_key": "error",
+                    "progress": int((i + 1) / total_stages * 100),
+                    "stages_completed": list(completed),
+                    "error": stage_result.error or f"阶段 {stage_names.get(stage, stage)} 执行失败",
+                }
+                return
+
             completed.append(stage)
 
         _pipeline_status[project_id] = {
@@ -155,6 +169,8 @@ async def run_pipeline(project_id: str, request: PipelineRequest = None):
         request = PipelineRequest()
 
     config = load_config()
+    if request.extraction_level:
+        config.setdefault("extraction", {})["extraction_level"] = request.extraction_level
     task = asyncio.create_task(_run_pipeline_task(project_id, config, request))
     _pipeline_tasks[project_id] = task
 

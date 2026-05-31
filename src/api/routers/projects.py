@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from src.storage.project_store import ProjectStore
+from src.api.image_paths import get_project_images_dir
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ def _format_project(info: dict) -> dict:
         elif etype == "item":
             entity_stats["items"] += 1
 
-    images_dir = project_dir / "images"
+    images_dir = get_project_images_dir(project_id)
     image_count = 0
     if images_dir.exists():
         image_count = sum(1 for _ in images_dir.rglob("*.png"))

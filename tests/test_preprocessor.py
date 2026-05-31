@@ -61,6 +61,24 @@ class TestPreprocessor:
         chapters = self.preprocessor.split_chapters(text, "test_project")
         assert len(chapters) == 2
 
+    def test_split_chapters_dedupes_repeated_titles(self):
+        """测试重复章节标题不会导致编号变成 2/4/6"""
+        text = """第一章 太阳消失
+第一章 太阳消失()
+这是第一章的内容。
+
+第二章 全球恐慌
+第二章 全球恐慌()
+这是第二章的内容。
+
+第三章 黑暗时代
+第三章 黑暗时代()
+这是第三章的内容。"""
+        chapters = self.preprocessor.split_chapters(text, "test_project")
+        assert len(chapters) == 3
+        assert [chapter.number for chapter in chapters] == [1, 2, 3]
+        assert chapters[0].title == "太阳消失"
+
     def test_split_chapters_by_chapter_patten_chinese(self):
         """测试章节分割 - 中文章节格式"""
         text = """第一章 穿越异世

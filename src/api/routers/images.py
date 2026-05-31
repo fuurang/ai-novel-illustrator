@@ -1,4 +1,5 @@
 import asyncio
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +14,12 @@ from src.models.prompt import Prompt
 from src.models.world_bible import WorldBible
 from src.render.chatgpt2api_backend import ChatGPT2APIBackend
 from src.api.routers.settings import load_config
+from src.api.image_paths import (
+    candidate_image_paths,
+    get_project_images_dir,
+    get_project_output_dir,
+    image_url,
+)
 
 router = APIRouter()
 
@@ -24,6 +31,11 @@ _image_tasks: dict = {}
 class GenerateRequest(BaseModel):
     entity_ids: Optional[list[str]] = None
     chapter: Optional[int] = None
+    skip_locked: bool = True
+
+
+class LockImageRequest(BaseModel):
+    locked: bool = True
 
 
 def _build_image_generator(config: dict) -> ImageGenerator:
@@ -38,8 +50,94 @@ def _build_image_generator(config: dict) -> ImageGenerator:
     return ImageGenerator(backend, config)
 
 
-async def _generate_images_for_project(project_id: str, entity_ids: Optional[list[str]] = None, chapter: Optional[int] = None):
+def _entity_image_path(project_id: str, entity: dict) -> Optional[Path]:
+    locked_path = entity.get("locked_image_path")
+    if entity.get("image_locked") and locked_path:
+        locked_image_path = store.get_project_dir(project_id) / locked_path
+        if locked_image_path.exists():
+            return locked_image_path
+
+    category_dirs = {
+        "character": "characters",
+        "scene": "scenes",
+        "item": "items",
+        "creature": "characters",
+    }
+    image_dir = category_dirs.get(entity.get("type", ""))
+    if not image_dir:
+        return None
+
+    entity_id = entity.get("id", "")
+    candidates = candidate_image_paths(project_id, image_dir, f"{entity_id}.png")
+    if entity.get("type") in {"character", "creature"}:
+        candidates.extend(candidate_image_paths(project_id, "scenes", f"{entity_id}.png"))
+
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _lock_entity_image(project_id: str, entity_id: str, locked: bool) -> dict:
+    entities_data = store.load_entities(project_id)
+    target_idx = None
+    for index, entity in enumerate(entities_data):
+        if entity.get("id") == entity_id:
+            target_idx = index
+            break
+
+    if target_idx is None:
+        return {"error": f"出图对象不存在: {entity_id}"}
+
+    entity = entities_data[target_idx]
+
+    if not locked:
+        entity["image_locked"] = False
+        entities_data[target_idx] = entity
+        store.save_entities(project_id, entities_data)
+        current_path = _entity_image_path(project_id, entity)
+        return {
+            "entity_id": entity_id,
+            "image_locked": False,
+            "image_url": image_url(project_id, current_path) if current_path else None,
+        }
+
+    source_path = _entity_image_path(project_id, entity)
+    if source_path is None:
+        return {"error": "当前对象还没有可保存的图片"}
+
+    locked_dir = get_project_images_dir(project_id) / "locked"
+    locked_dir.mkdir(parents=True, exist_ok=True)
+    locked_path = locked_dir / f"{entity_id}.png"
+    if source_path.resolve() != locked_path.resolve():
+        shutil.copy2(source_path, locked_path)
+
+    relative_locked_path = locked_path.relative_to(store.get_project_dir(project_id))
+    entity["image_locked"] = True
+    entity["locked_image_path"] = str(relative_locked_path).replace("\\", "/")
+    entities_data[target_idx] = entity
+    store.save_entities(project_id, entities_data)
+
+    return {
+        "entity_id": entity_id,
+        "image_locked": True,
+        "locked_image_path": entity["locked_image_path"],
+        "locked_image_url": image_url(project_id, locked_path),
+        "image_url": image_url(project_id, locked_path),
+    }
+
+
+async def _generate_images_for_project(
+    project_id: str,
+    entity_ids: Optional[list[str]] = None,
+    chapter: Optional[int] = None,
+    skip_locked: bool = True,
+):
     config = load_config()
+    image_config = config.get("image", {})
+    if not image_config.get("enabled", False):
+        return {"error": "生图功能未启用，请先在设置中开启 image.enabled"}
+    if image_config.get("backend") != "chatgpt2api":
+        return {"error": f"当前仅支持 chatgpt2api 生图后端，当前配置为 {image_config.get('backend')}"}
+    if not image_config.get("chatgpt2api", {}).get("api_key"):
+        return {"error": "生图后端 API Key 为空，请先在设置中配置"}
 
     entities_data = store.load_entities(project_id)
     prompts_data = store.load_prompts(project_id)
@@ -49,8 +147,10 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
     except FileNotFoundError:
         world_bible_data = None
 
-    if not entities_data or not prompts_data:
-        return {"error": "缺少实体或提示词数据，请先运行流水线"}
+    if not entities_data:
+        return {"error": "缺少出图对象，请先到 AI 工作台执行“识别出图对象”"}
+    if not prompts_data:
+        return {"error": "缺少绘图指令，请先在 AI 工作台生成角色、场景或物品的绘图指令"}
 
     entities = [Entity(**e) for e in entities_data]
     prompts = [Prompt(**p) for p in prompts_data]
@@ -59,6 +159,16 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
     if entity_ids:
         entities = [e for e in entities if e.id in entity_ids]
         prompts = [p for p in prompts if p.entity_id in entity_ids]
+
+    if skip_locked:
+        locked_entity_ids = {
+            e.get("id")
+            for e in entities_data
+            if e.get("image_locked") and e.get("locked_image_path")
+        }
+        if locked_entity_ids:
+            entities = [e for e in entities if e.id not in locked_entity_ids]
+            prompts = [p for p in prompts if p.entity_id not in locked_entity_ids]
 
     if chapter is not None:
         chapter_entity_ids = set()
@@ -75,9 +185,8 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
         entities = [e for e in entities if e.id in chapter_entity_ids]
         prompts = [p for p in prompts if p.entity_id in chapter_entity_ids]
 
-    project_dir = store.get_project_dir(project_id)
-    output_dir = str(project_dir / "images")
-    face_anchor_dir = str(project_dir / "images" / "face_anchors")
+    output_dir = str(get_project_images_dir(project_id))
+    face_anchor_dir = str(get_project_images_dir(project_id) / "face_anchors")
 
     generator = _build_image_generator(config)
 
@@ -108,6 +217,13 @@ async def _generate_images_for_project(project_id: str, entity_ids: Optional[lis
 
 async def _generate_single_entity_image(project_id: str, entity_id: str, chapter: Optional[int] = None):
     config = load_config()
+    image_config = config.get("image", {})
+    if not image_config.get("enabled", False):
+        return {"error": "生图功能未启用，请先在设置中开启 image.enabled"}
+    if image_config.get("backend") != "chatgpt2api":
+        return {"error": f"当前仅支持 chatgpt2api 生图后端，当前配置为 {image_config.get('backend')}"}
+    if not image_config.get("chatgpt2api", {}).get("api_key"):
+        return {"error": "生图后端 API Key 为空，请先在设置中配置"}
 
     entities_data = store.load_entities(project_id)
     prompts_data = store.load_prompts(project_id)
@@ -124,7 +240,10 @@ async def _generate_single_entity_image(project_id: str, entity_id: str, chapter
             break
 
     if not entity_data:
-        return {"error": f"实体不存在: {entity_id}"}
+        return {"error": f"出图对象不存在: {entity_id}"}
+
+    if entity_data.get("image_locked") and entity_data.get("locked_image_path"):
+        return {"error": "当前图片已保存锁定，请先取消保存后再重抽"}
 
     prompt_data = None
     for p in prompts_data:
@@ -133,15 +252,14 @@ async def _generate_single_entity_image(project_id: str, entity_id: str, chapter
             break
 
     if not prompt_data:
-        return {"error": f"实体 {entity_id} 没有对应的提示词"}
+        return {"error": f"出图对象 {entity_id} 没有对应的绘图指令"}
 
     entity = Entity(**entity_data)
     prompt = Prompt(**prompt_data)
     world_bible = WorldBible(**world_bible_data) if world_bible_data else None
 
-    project_dir = store.get_project_dir(project_id)
-    output_dir = str(project_dir / "images")
-    face_anchor_dir = str(project_dir / "images" / "face_anchors")
+    output_dir = str(get_project_images_dir(project_id))
+    face_anchor_dir = str(get_project_images_dir(project_id) / "face_anchors")
 
     generator = _build_image_generator(config)
 
@@ -154,7 +272,7 @@ async def _generate_single_entity_image(project_id: str, entity_id: str, chapter
                 entity, prompt, face_anchor_path, output_dir
             )
         else:
-            result = await generator.generate_scene(entity, prompt, output_dir=output_dir)
+            result = await generator.generate_character_without_face(entity, prompt, output_dir)
     elif entity.type == EntityType.SCENE:
         result = await generator.generate_scene(entity, prompt, output_dir=output_dir)
     elif entity.type == EntityType.ITEM:
@@ -174,7 +292,10 @@ async def _generate_single_entity_image(project_id: str, entity_id: str, chapter
                 break
         store.save_entities(project_id, entities_data)
 
-    return {"entity_id": entity_id, "image_path": result, "chapter": chapter}
+    image_path = Path(result) if isinstance(result, str) else None
+    image_url_value = image_url(project_id, image_path) if image_path and image_path.exists() else None
+
+    return {"entity_id": entity_id, "image_path": result, "image_url": image_url_value, "chapter": chapter}
 
 
 @router.post("/{project_id}/generate")
@@ -184,11 +305,21 @@ async def generate_images(project_id: str, request: GenerateRequest = None):
 
     entity_ids = request.entity_ids if request else None
     chapter = request.chapter if request else None
+    skip_locked = request.skip_locked if request else True
 
-    task = asyncio.create_task(_generate_images_for_project(project_id, entity_ids, chapter))
-    _image_tasks[f"{project_id}_batch"] = task
+    try:
+        result = await _generate_images_for_project(project_id, entity_ids, chapter, skip_locked)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图片生成失败: {str(e)}")
 
-    return {"message": "图片生成已启动", "project_id": project_id, "chapter": chapter}
+    if isinstance(result, dict) and "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    if isinstance(result, dict) and result.get("errors") and not (
+        result.get("characters") or result.get("scenes") or result.get("items")
+    ):
+        raise HTTPException(status_code=502, detail="；".join(result["errors"][:3]))
+
+    return {"message": "图片生成完成", "project_id": project_id, "chapter": chapter, "result": result}
 
 
 @router.post("/{project_id}/generate/{entity_id}")
@@ -211,6 +342,22 @@ async def generate_entity_image(
     return result
 
 
+@router.post("/{project_id}/images/{entity_id}/lock")
+async def lock_entity_image(project_id: str, entity_id: str, request: LockImageRequest):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    try:
+        result = _lock_entity_image(project_id, entity_id, request.locked)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图片保存状态更新失败: {str(e)}")
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
 @router.get("/{project_id}/images")
 async def list_images(
     project_id: str,
@@ -219,8 +366,7 @@ async def list_images(
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
 
-    project_dir = store.get_project_dir(project_id)
-    images_dir = project_dir / "images"
+    images_dir = get_project_images_dir(project_id)
 
     entities_data = store.load_entities(project_id)
     entity_chapter_map: dict[str, list[int]] = {}
@@ -243,7 +389,7 @@ async def list_images(
     images = []
     if images_dir.exists():
         for image_path in images_dir.rglob("*.png"):
-            relative = image_path.relative_to(project_dir)
+            relative = image_path.relative_to(get_project_output_dir(project_id))
             parts = relative.parts
             entity_id = None
             category = "other"
@@ -267,7 +413,7 @@ async def list_images(
                 image_chapters = entity_chapter_map[entity_id]
 
             image_info = {
-                "path": f"/output/{project_id}/{str(relative).replace(chr(92), '/')}",
+                "path": image_url(project_id, image_path),
                 "filename": image_path.name,
                 "category": category,
                 "entity_id": entity_id,

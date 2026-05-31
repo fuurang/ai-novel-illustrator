@@ -14,6 +14,7 @@ world_bible:
   require_user_confirm: true
 
 extraction:
+  extraction_level: "balanced"
   max_chapters_parallel: 3
   entity_confidence_threshold: 0.7
   dedup_similarity_threshold: 0.85
@@ -30,6 +31,7 @@ prompt:
 image:
   enabled: false
   backend: "chatgpt2api"
+  max_parallel: 3
   chatgpt2api:
     base_url: "https://api.openai.com/v1"
     api_key: ""

@@ -104,11 +104,15 @@ class PromptGenerator:
             try:
                 system_prompt, user_prompt = self.prompt_loader.render("character_prompt", {
                     "entity_json": json.dumps(entity.model_dump(), ensure_ascii=False, indent=2),
-                    "world_bible_visual_anchoring": json.dumps(wb.visual_anchoring.model_dump(), ensure_ascii=False, indent=2),
+                    "world_bible_visual_anchoring": json.dumps(
+                        self._build_world_context(wb, "character"),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
                     "source_quotes": self._format_quotes(entity.source_quotes),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 return self._to_prompt(result, entity, "character", "3:4")
                 
             except Exception:
@@ -132,12 +136,16 @@ class PromptGenerator:
             try:
                 system_prompt, user_prompt = self.prompt_loader.render("scene_prompt", {
                     "entity_json": json.dumps(entity.model_dump(), ensure_ascii=False, indent=2),
-                    "world_bible_visual_anchoring": json.dumps(wb.visual_anchoring.model_dump(), ensure_ascii=False, indent=2),
+                    "world_bible_visual_anchoring": json.dumps(
+                        self._build_world_context(wb, "scene"),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
                     "world_bible_scene_rules": json.dumps(wb.scene_visual_rules.model_dump(), ensure_ascii=False),
                     "source_quotes": self._format_quotes(entity.source_quotes),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 return self._to_prompt(result, entity, "scene", "16:9")
                 
             except Exception:
@@ -161,12 +169,16 @@ class PromptGenerator:
             try:
                 system_prompt, user_prompt = self.prompt_loader.render("item_prompt", {
                     "entity_json": json.dumps(entity.model_dump(), ensure_ascii=False, indent=2),
-                    "world_bible_visual_anchoring": json.dumps(wb.visual_anchoring.model_dump(), ensure_ascii=False, indent=2),
+                    "world_bible_visual_anchoring": json.dumps(
+                        self._build_world_context(wb, "item"),
+                        ensure_ascii=False,
+                        indent=2,
+                    ),
                     "world_bible_item_rules": json.dumps(wb.item_visual_rules.model_dump(), ensure_ascii=False),
                     "source_quotes": self._format_quotes(entity.source_quotes),
                 })
                 
-                result = await self.llm.generate_json(user_prompt, system_prompt)
+                result = await self.llm.generate_json_async(user_prompt, system_prompt)
                 return self._to_prompt(result, entity, "item", "1:1")
                 
             except Exception:
@@ -207,6 +219,22 @@ class PromptGenerator:
             ),
             source_quotes=[{"chapter": q.chapter, "text": q.text, "location": q.location} for q in entity.source_quotes],
         )
+
+    def _build_world_context(self, wb: WorldBible, prompt_type: str) -> dict:
+        context = {
+            "visual_anchoring": wb.visual_anchoring.model_dump(),
+            "world_framework": wb.world_framework.model_dump(),
+            "user_worldview_text": wb.user_worldview_text,
+        }
+
+        if prompt_type == "character":
+            context["character_visual_rules"] = wb.character_visual_rules.model_dump()
+        elif prompt_type == "scene":
+            context["scene_visual_rules"] = wb.scene_visual_rules.model_dump()
+        elif prompt_type == "item":
+            context["item_visual_rules"] = wb.item_visual_rules.model_dump()
+
+        return context
     
     def _format_quotes(self, quotes: list[SourceQuote]) -> str:
         """

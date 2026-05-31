@@ -58,6 +58,32 @@ class ChatGPT2APIBackend:
             except httpx.HTTPError as e:
                 return {'error': str(e)}
 
+    async def _download_or_decode_image(self, image_payload: str) -> bytes:
+        if image_payload.startswith('http://') or image_payload.startswith('https://'):
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(image_payload)
+                response.raise_for_status()
+                return response.content
+
+        if image_payload.startswith('data:image'):
+            image_payload = image_payload.split(',', 1)[1]
+
+        return base64.b64decode(image_payload)
+
+    async def _result_to_bytes(self, result: Dict[str, Any]) -> bytes:
+        if result.get('error'):
+            raise RuntimeError(result['error'])
+
+        data = result.get('data') or []
+        if not data:
+            raise RuntimeError('生图服务未返回图片数据')
+
+        image_payload = data[0].get('b64_json') or data[0].get('url')
+        if not image_payload:
+            raise RuntimeError('生图服务返回的数据中没有可用图片内容')
+
+        return await self._download_or_decode_image(image_payload)
+
     def generate(
         self,
         prompt: str,
@@ -84,8 +110,8 @@ class ChatGPT2APIBackend:
 
     async def _edit_async(
         self,
-        image_path: str,
-        mask_path: Optional[str],
+        image_data: bytes,
+        mask_data: Optional[bytes],
         prompt: str,
         **kwargs
     ) -> Dict[str, Any]:
@@ -100,20 +126,18 @@ class ChatGPT2APIBackend:
         Returns:
             编辑结果
         """
-        with open(image_path, 'rb') as f:
-            image_data = base64.b64encode(f.read()).decode()
-        
+        encoded_image = base64.b64encode(image_data).decode()
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             payload = {
                 'model': self.model,
-                'image': image_data,
-                'prompt': prompt
+                'image': encoded_image,
+                'prompt': prompt,
+                'size': kwargs.get('size', '1024x1024'),
             }
             
-            if mask_path:
-                with open(mask_path, 'rb') as f:
-                    mask_data = base64.b64encode(f.read()).decode()
-                payload['mask'] = mask_data
+            if mask_data:
+                payload['mask'] = base64.b64encode(mask_data).decode()
             
             headers = {
                 'Authorization': f'Bearer {self.api_key}',
@@ -130,6 +154,43 @@ class ChatGPT2APIBackend:
                 return response.json()
             except httpx.HTTPError as e:
                 return {'error': str(e)}
+
+    async def generate_face_anchor(
+        self,
+        prompt: str,
+        size: str = '1024x1024',
+    ) -> bytes:
+        result = await self._generate_async(prompt, size=size)
+        return await self._result_to_bytes(result)
+
+    async def generate_scene(
+        self,
+        scene_prompt: str,
+        style_reference: Optional[bytes] = None,
+        size: str = '1536x1024',
+    ) -> bytes:
+        if style_reference:
+            result = await self._edit_async(style_reference, None, scene_prompt, size=size)
+        else:
+            result = await self._generate_async(scene_prompt, size=size)
+        return await self._result_to_bytes(result)
+
+    async def generate_item(
+        self,
+        item_prompt: str,
+        size: str = '1024x1024',
+    ) -> bytes:
+        result = await self._generate_async(item_prompt, size=size)
+        return await self._result_to_bytes(result)
+
+    async def generate_character_with_face(
+        self,
+        character_prompt: str,
+        face_anchor_bytes: bytes,
+        size: str = '1024x1536',
+    ) -> bytes:
+        result = await self._edit_async(face_anchor_bytes, None, character_prompt, size=size)
+        return await self._result_to_bytes(result)
 
     def edit(
         self,
@@ -155,7 +216,9 @@ class ChatGPT2APIBackend:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         
-        return loop.run_until_complete(self._edit_async(image_path, mask_path, prompt))
+        image_data = Path(image_path).read_bytes()
+        mask_data = Path(mask_path).read_bytes() if mask_path else None
+        return loop.run_until_complete(self._edit_async(image_data, mask_data, prompt))
 
     def _save_image(self, image_data: str, output_path: str) -> str:
         """保存图像

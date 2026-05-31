@@ -20,6 +20,7 @@ from src.models.entity import Entity, EntityType
 from src.models.world_bible import WorldBible, WorldFramework, VisualAnchoring, ColorPalette
 from src.models.prompt import Prompt, PromptParameters
 from src.storage.project_store import ProjectStore
+from src.api.routers.chapters import next_scene_start_chapter
 
 
 class TestPipelineContext:
@@ -229,6 +230,26 @@ class TestProjectStore:
         assert self.store.project_exists(project_id) == True
         self.store.delete_project(project_id)
         assert self.store.project_exists(project_id) == False
+
+
+class TestSceneSegmentationProgress:
+    def test_next_scene_start_ignores_quick_groups(self):
+        chapters = [{"number": number} for number in range(1, 9)]
+        groups = [
+            {"source": "quick", "chapters": [1, 2, 3, 4, 5], "chapter_range": "1-5"},
+        ]
+
+        assert next_scene_start_chapter(chapters, groups) == 1
+
+    def test_next_scene_start_uses_confirmed_groups(self):
+        chapters = [{"number": number} for number in range(1, 9)]
+        groups = [
+            {"source": "quick", "chapters": [1, 2, 3, 4, 5], "chapter_range": "1-5"},
+            {"source": "ai", "chapters": [1, 2], "chapter_range": "1-2"},
+            {"source": "manual", "chapters": [3], "chapter_range": "3"},
+        ]
+
+        assert next_scene_start_chapter(chapters, groups) == 4
 
 
 class TestLoadProjectContext:

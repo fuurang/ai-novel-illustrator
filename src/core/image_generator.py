@@ -8,6 +8,7 @@
 - 这比 ComfyUI 的 IP-Adapter 方案更简单，无需 GPU，无需训练
 """
 
+import asyncio
 from pathlib import Path
 from typing import Union
 from src.models.entity import Entity, EntityType
@@ -42,6 +43,8 @@ class ImageGenerator:
             "item": "1024x1024",
             "face_anchor": "1024x1024",
         })
+        image_config = self.config.get("image", self.config)
+        self.max_parallel = int(image_config.get("max_parallel", 3) or 3)
 
     async def generate_character(
         self,
@@ -124,6 +127,25 @@ class ImageGenerator:
         
         return str(output_path)
 
+    async def generate_character_without_face(
+        self,
+        entity: Entity,
+        prompt: Prompt,
+        output_dir: str,
+        size: str = "1024x1536",
+    ) -> str:
+        image_bytes = await self.backend.generate_scene(
+            scene_prompt=prompt.chinese_prompt,
+            style_reference=None,
+            size=size,
+        )
+
+        output_path = Path(output_dir) / "characters" / f"{entity.id}.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(image_bytes)
+
+        return str(output_path)
+
     async def generate_item(
         self,
         entity: Entity,
@@ -187,53 +209,68 @@ class ImageGenerator:
             Exception: 批量生成过程中出现错误时抛出异常
         """
         prompt_map = {p.entity_id: p for p in prompts}
-        results = {"characters": [], "scenes": [], "items": []}
+        results = {"characters": [], "scenes": [], "items": [], "errors": []}
         first_scene_path = None
 
-        for entity in entities:
+        semaphore = asyncio.Semaphore(max(1, self.max_parallel))
+
+        async def generate_entity(entity: Entity) -> tuple[str, str | None]:
             prompt = prompt_map.get(entity.id)
             if not prompt:
-                continue
+                return "skip", None
 
             try:
-                if entity.type == EntityType.CHARACTER:
-                    face_anchor_path = str(Path(face_anchor_dir) / f"{entity.id}.png")
-                    if Path(face_anchor_path).exists():
-                        path = await self.generate_character(
-                            entity, 
-                            prompt, 
-                            face_anchor_path, 
+                async with semaphore:
+                    if entity.type == EntityType.CHARACTER:
+                        face_anchor_path = str(Path(face_anchor_dir) / f"{entity.id}.png")
+                        if not Path(face_anchor_path).exists():
+                            path = await self.generate_character_without_face(
+                                entity,
+                                prompt,
+                                output_dir,
+                                self.default_sizes.get("character", "1024x1536")
+                            )
+                        else:
+                            path = await self.generate_character(
+                                entity,
+                                prompt,
+                                face_anchor_path,
+                                output_dir,
+                                self.default_sizes.get("character", "1024x1536")
+                            )
+                        return "characters", path
+
+                    if entity.type == EntityType.SCENE:
+                        path = await self.generate_scene(
+                            entity,
+                            prompt,
+                            first_scene_path,
                             output_dir,
-                            self.default_sizes.get("character", "1024x1536")
+                            self.default_sizes.get("scene", "1536x1024")
                         )
-                        results["characters"].append(path)
-                    else:
-                        print(f"警告: 角色 {entity.name} 缺少面部锚定图，跳过")
+                        return "scenes", path
 
-                elif entity.type == EntityType.SCENE:
-                    path = await self.generate_scene(
-                        entity, 
-                        prompt, 
-                        first_scene_path, 
-                        output_dir,
-                        self.default_sizes.get("scene", "1536x1024")
-                    )
-                    results["scenes"].append(path)
-                    if not first_scene_path:
-                        first_scene_path = path
-
-                elif entity.type == EntityType.ITEM:
-                    path = await self.generate_item(
-                        entity, 
-                        prompt, 
-                        output_dir,
-                        self.default_sizes.get("item", "1024x1024")
-                    )
-                    results["items"].append(path)
+                    if entity.type == EntityType.ITEM:
+                        path = await self.generate_item(
+                            entity,
+                            prompt,
+                            output_dir,
+                            self.default_sizes.get("item", "1024x1024")
+                        )
+                        return "items", path
 
             except Exception as e:
-                print(f"生成 {entity.type.value} {entity.name} 图片失败: {e}")
-                continue
+                message = f"Generate {entity.type.value} {entity.name} image failed: {e}"
+                print(message)
+                return "errors", message
+
+            return "skip", None
+
+        task_results = await asyncio.gather(*(generate_entity(entity) for entity in entities))
+
+        for key, value in task_results:
+            if key in results and value:
+                results[key].append(value)
 
         return results
 

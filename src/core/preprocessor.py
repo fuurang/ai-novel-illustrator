@@ -78,9 +78,45 @@ class Preprocessor:
         for pattern in CHAPTER_PATTERNS:
             matches = list(pattern.finditer(text))
             if len(matches) >= 2:
-                return self._split_by_matches(text, matches, project_id)
+                matches = self._dedupe_adjacent_matches(text, matches)
+                if len(matches) >= 2:
+                    return self._split_by_matches(text, matches, project_id)
         
         return self._split_by_window(text, project_id)
+
+    def _dedupe_adjacent_matches(self, text: str, matches: list) -> list:
+        """
+        去重相邻的重复章节标题。
+
+        某些文本会同时出现：
+        - 第一章 太阳消失
+        - 第一章 太阳消失()
+
+        两行几乎挨在一起，语义上是同一个标题。如果不去重，会导致奇数命中为空正文，
+        最终保存的章节编号变成 2,4,6...
+        """
+        if not matches:
+            return matches
+
+        deduped = [matches[0]]
+        for match in matches[1:]:
+            prev = deduped[-1]
+            prev_title = self._extract_clean_title(prev.group().strip())
+            current_title = self._extract_clean_title(match.group().strip())
+            between = text[prev.end():match.start()]
+            is_duplicate_heading = (
+                prev_title
+                and prev_title == current_title
+                and not between.strip()
+                and (match.start() - prev.start()) <= 120
+            )
+
+            if is_duplicate_heading:
+                deduped[-1] = match
+            else:
+                deduped.append(match)
+
+        return deduped
     
     def _extract_clean_title(self, title: str) -> str:
         """
