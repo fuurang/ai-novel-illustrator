@@ -1,6 +1,8 @@
 import json
+import re
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -64,6 +66,10 @@ class AiApplyRequest(BaseModel):
     run_id: str
 
 
+class AiAttachmentContentRequest(BaseModel):
+    ref: str
+
+
 TASKS = [
     {
         "key": "world_bible_analyze",
@@ -82,14 +88,14 @@ TASKS = [
     {
         "key": "entity_extraction",
         "label": "识别出图对象",
-        "description": "从指定章节识别需要生图的角色、场景和物品",
+        "description": "从当前场景正文识别需要生图的角色、场景和物品",
         "needs": ["chapter", "world_bible"],
         "can_apply": True,
     },
     {
         "key": "character_attribute",
-        "label": "整理角色视觉设定",
-        "description": "为指定角色补全稳定外观、服装和阶段变化",
+        "label": "精修角色视觉设定",
+        "description": "基于当前场景和已有证据持续补充指定角色的外观、语言动作气质和阶段变化",
         "needs": ["entity", "world_bible"],
         "can_apply": True,
     },
@@ -319,6 +325,386 @@ def _format_quotes(entity: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_chapter_appearances(entity: dict) -> str:
+    appearances = entity.get("chapter_appearances", [])
+    if not appearances:
+        return "（暂无章节出场记录）"
+
+    lines = []
+    for item in appearances[:120]:
+        if not isinstance(item, dict):
+            lines.append(f"- {item}")
+            continue
+        chapter = item.get("chapter", 0)
+        context = item.get("context", "")
+        appearance_note = item.get("appearance_note", "")
+        clothing_override = item.get("clothing_override", "")
+        source_quote = item.get("source_quote", "")
+        detail_parts = [
+            part for part in [
+                f"场景/动作: {context}" if context else "",
+                f"外观: {appearance_note}" if appearance_note else "",
+                f"服饰变化: {clothing_override}" if clothing_override else "",
+                f"证据: {source_quote}" if source_quote else "",
+            ]
+            if part
+        ]
+        lines.append(f"- 第{chapter}章: " + "；".join(detail_parts))
+
+    return "\n".join(lines)
+
+
+def _latest_prompt_for_entity(project_id: str, entity_id: str, prompt_type: Optional[str] = None) -> Optional[dict]:
+    for prompt in store.load_prompts(project_id):
+        if prompt.get("entity_id") != entity_id:
+            continue
+        if prompt_type and prompt.get("type") != prompt_type:
+            continue
+        prompt_copy = dict(prompt)
+        if prompt_copy.get("chinese_prompt"):
+            prompt_copy["chinese_prompt"] = str(prompt_copy["chinese_prompt"])[:3000]
+        if prompt_copy.get("negative_prompt"):
+            prompt_copy["negative_prompt"] = str(prompt_copy["negative_prompt"])[:1000]
+        return prompt_copy
+    return None
+
+
+_EMPTY_TEXT_MARKERS = {
+    "",
+    "原文未提及",
+    "未提及",
+    "暂无",
+    "不详",
+    "不明确",
+    "未知",
+    "无法判断",
+    "无明确证据",
+    "没有明确证据",
+}
+
+
+def _is_meaningful(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        text = value.strip()
+        normalized = text.strip("。；;,.，、：: ")
+        if normalized in _EMPTY_TEXT_MARKERS:
+            return False
+        if normalized in {"无明确原文证据", "证据不足", "原文没有明确提及"}:
+            return False
+        return True
+    if isinstance(value, list):
+        return any(_is_meaningful(item) for item in value)
+    if isinstance(value, dict):
+        return any(_is_meaningful(item) for item in value.values())
+    return True
+
+
+def _dedupe_list(items: List[Any]) -> List[Any]:
+    seen = set()
+    result = []
+    for item in items:
+        if not _is_meaningful(item):
+            continue
+        if isinstance(item, str):
+            key = item.strip()
+        else:
+            key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _merge_attribute_value(existing: Any, incoming: Any) -> Any:
+    if not _is_meaningful(incoming):
+        return existing
+    if not _is_meaningful(existing):
+        return incoming
+    if isinstance(existing, dict) and isinstance(incoming, dict):
+        merged = dict(existing)
+        for key, value in incoming.items():
+            merged[key] = _merge_attribute_value(merged.get(key), value)
+        return merged
+    if isinstance(existing, list) and isinstance(incoming, list):
+        return _dedupe_list(existing + incoming)
+    return incoming
+
+
+def _as_list(value: Any) -> List[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _coerce_chapter(value: Any) -> int:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        match = re.search(r"\d+", value)
+        if match:
+            return int(match.group(0))
+    return 0
+
+
+def _coerce_source_quote(item: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(item, str):
+        text = item.strip()
+        return {"chapter": 0, "text": text, "location": ""} if text else None
+    if not isinstance(item, dict):
+        return None
+
+    raw_text = (
+        item.get("text")
+        or item.get("quote")
+        or item.get("source_quote")
+        or item.get("evidence")
+        or ""
+    )
+    text = str(raw_text).strip()
+    if not text:
+        return None
+
+    chapter = _coerce_chapter(item.get("chapter") or item.get("chapter_number"))
+    location = item.get("location") or (f"第{chapter}章" if chapter else "")
+    return {
+        "chapter": chapter,
+        "text": text,
+        "location": location,
+    }
+
+
+def _source_quote_text(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return str(item.get("text") or item.get("quote") or item.get("source_quote") or "").strip()
+    return ""
+
+
+def _merge_source_quotes(entity: dict, parsed: Dict[str, Any]) -> int:
+    evidence_updates = parsed.get("evidence_updates", {}) if isinstance(parsed.get("evidence_updates"), dict) else {}
+    incoming_items: List[Any] = []
+    for key in ["source_quotes", "new_source_quotes", "visual_evidence_quotes"]:
+        incoming_items.extend(_as_list(parsed.get(key)))
+    incoming_items.extend(_as_list(evidence_updates.get("source_quotes")))
+
+    existing = entity.get("source_quotes", [])
+    existing_texts = {_source_quote_text(item) for item in existing if _source_quote_text(item)}
+    added = 0
+    for item in incoming_items:
+        quote = _coerce_source_quote(item)
+        if not quote:
+            continue
+        text = quote["text"]
+        if text in existing_texts:
+            continue
+        existing.append(quote)
+        existing_texts.add(text)
+        added += 1
+
+    entity["source_quotes"] = existing[:300]
+    return added
+
+
+def _coerce_chapter_appearance(item: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+
+    chapter = _coerce_chapter(item.get("chapter") or item.get("chapter_number") or item.get("start_chapter"))
+    context = item.get("context") or item.get("scene") or item.get("event") or item.get("action_context") or ""
+    appearance_note = (
+        item.get("appearance_note")
+        or item.get("appearance")
+        or item.get("visual_note")
+        or item.get("description")
+        or ""
+    )
+    clothing_override = item.get("clothing_override") or item.get("clothing") or item.get("costume") or ""
+    source_quote = item.get("source_quote") or item.get("quote") or item.get("text") or ""
+
+    if not chapter and not any([context, appearance_note, clothing_override, source_quote]):
+        return None
+
+    return {
+        "chapter": chapter,
+        "context": str(context).strip(),
+        "appearance_note": str(appearance_note).strip(),
+        "clothing_override": str(clothing_override).strip(),
+        "source_quote": str(source_quote).strip(),
+    }
+
+
+def _appearance_signature(item: Dict[str, Any]) -> tuple:
+    quote = str(item.get("source_quote", "")).strip()
+    if quote:
+        return (item.get("chapter", 0), quote)
+    return (
+        item.get("chapter", 0),
+        str(item.get("context", "")).strip(),
+        str(item.get("appearance_note", "")).strip(),
+        str(item.get("clothing_override", "")).strip(),
+    )
+
+
+def _merge_chapter_appearances(entity: dict, parsed: Dict[str, Any]) -> int:
+    evidence_updates = parsed.get("evidence_updates", {}) if isinstance(parsed.get("evidence_updates"), dict) else {}
+    incoming_items: List[Any] = []
+    for key in ["chapter_appearances", "appearance_updates", "stage_appearances"]:
+        incoming_items.extend(_as_list(parsed.get(key)))
+    incoming_items.extend(_as_list(evidence_updates.get("chapter_appearances")))
+
+    appearances = [
+        item for item in entity.get("chapter_appearances", [])
+        if isinstance(item, dict)
+    ]
+    index_by_signature = {
+        _appearance_signature(item): idx
+        for idx, item in enumerate(appearances)
+    }
+    added = 0
+
+    for item in incoming_items:
+        appearance = _coerce_chapter_appearance(item)
+        if not appearance:
+            continue
+        signature = _appearance_signature(appearance)
+        existing_idx = index_by_signature.get(signature)
+        if existing_idx is not None:
+            current = appearances[existing_idx]
+            for key, value in appearance.items():
+                if _is_meaningful(value) and not _is_meaningful(current.get(key)):
+                    current[key] = value
+            appearances[existing_idx] = current
+            continue
+        appearances.append(appearance)
+        index_by_signature[signature] = len(appearances) - 1
+        added += 1
+
+    appearances.sort(key=lambda item: _coerce_chapter(item.get("chapter")))
+    entity["chapter_appearances"] = appearances[:300]
+    return added
+
+
+def _refresh_entity_chapter_metadata(entity: dict) -> None:
+    chapters = set()
+    for quote in entity.get("source_quotes", []):
+        if isinstance(quote, dict):
+            chapter = _coerce_chapter(quote.get("chapter"))
+            if chapter:
+                chapters.add(chapter)
+    for appearance in entity.get("chapter_appearances", []):
+        if isinstance(appearance, dict):
+            chapter = _coerce_chapter(appearance.get("chapter"))
+            if chapter:
+                chapters.add(chapter)
+    for chapter in entity.get("source_chapters", []):
+        chapter_no = _coerce_chapter(chapter)
+        if chapter_no:
+            chapters.add(chapter_no)
+
+    if not chapters:
+        return
+
+    sorted_chapters = sorted(chapters)
+    entity["source_chapters"] = sorted_chapters
+    current_first = _coerce_chapter(entity.get("first_appearance_chapter"))
+    if not current_first or sorted_chapters[0] < current_first:
+        entity["first_appearance_chapter"] = sorted_chapters[0]
+    entity["chapter_range"] = (
+        str(sorted_chapters[0])
+        if sorted_chapters[0] == sorted_chapters[-1]
+        else f"{sorted_chapters[0]}-{sorted_chapters[-1]}"
+    )
+
+
+def _readable_report_from(parsed: Dict[str, Any]) -> str:
+    report = parsed.get("readable_report")
+    if isinstance(report, str) and report.strip():
+        return report.strip()
+    analysis = parsed.get("analysis")
+    if isinstance(analysis, dict):
+        report = analysis.get("readable_report") or analysis.get("summary")
+        if isinstance(report, str) and report.strip():
+            return report.strip()
+    return ""
+
+
+def _merge_refinement_notes(
+    entity: dict,
+    parsed: Dict[str, Any],
+    request: AiRunRequest,
+    added_quote_count: int,
+    added_appearance_count: int,
+) -> None:
+    attributes = entity.setdefault("attributes", {})
+    if not isinstance(attributes, dict):
+        attributes = {}
+        entity["attributes"] = attributes
+
+    refinement = attributes.setdefault("_refinement", {})
+    if not isinstance(refinement, dict):
+        refinement = {}
+        attributes["_refinement"] = refinement
+
+    now = datetime.now().isoformat()
+    report = _readable_report_from(parsed)
+    refinement["last_refined_at"] = now
+    refinement["last_attachment_refs"] = request.attachment_refs
+    refinement["prompt_refresh_required"] = True
+    if report:
+        refinement["last_report"] = report
+
+    for key in [
+        "missing_info",
+        "conflicts",
+        "uncertainties",
+        "revision_suggestions",
+        "visual_evidence",
+        "speech_action_evidence",
+        "stage_changes",
+    ]:
+        value = parsed.get(key)
+        if _is_meaningful(value):
+            refinement[key] = value
+
+    history = refinement.get("history", [])
+    if not isinstance(history, list):
+        history = []
+    history.insert(0, {
+        "refined_at": now,
+        "attachment_refs": request.attachment_refs,
+        "added_source_quotes": added_quote_count,
+        "added_chapter_appearances": added_appearance_count,
+        "summary": report[:500] if report else "",
+    })
+    refinement["history"] = history[:30]
+
+
+def _merge_character_attribute_result(entity: dict, parsed: Dict[str, Any], request: AiRunRequest) -> Dict[str, int]:
+    incoming_attributes = parsed.get("attributes") or parsed.get("refined_attributes") or {}
+    if isinstance(incoming_attributes, dict) and incoming_attributes:
+        existing_attributes = entity.get("attributes", {})
+        if not isinstance(existing_attributes, dict):
+            existing_attributes = {}
+        entity["attributes"] = _merge_attribute_value(existing_attributes, incoming_attributes)
+
+    added_quote_count = _merge_source_quotes(entity, parsed)
+    added_appearance_count = _merge_chapter_appearances(entity, parsed)
+    _refresh_entity_chapter_metadata(entity)
+    _merge_refinement_notes(entity, parsed, request, added_quote_count, added_appearance_count)
+    return {
+        "added_source_quotes": added_quote_count,
+        "added_chapter_appearances": added_appearance_count,
+    }
+
+
 def _summarize_world_bible(wb: WorldBible) -> str:
     forbidden = ", ".join(wb.visual_anchoring.forbidden_elements) if wb.visual_anchoring.forbidden_elements else "无"
     return (
@@ -334,7 +720,7 @@ def _summarize_world_bible(wb: WorldBible) -> str:
 def _format_existing_entities(project_id: str) -> str:
     entities = store.load_entities(project_id)
     if not entities:
-        return "（无已有实体）"
+        return "（无已有出图对象）"
 
     lines = []
     for entity in entities[:200]:
@@ -407,8 +793,31 @@ def _read_text_file(path: str) -> str:
             return f.read()
 
 
+def _safe_json_file(path: Path, fallback: Any) -> Any:
+    if not path.exists():
+        return fallback
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return fallback
+
+
+def _attachment_preview_text(value: Any, limit: int = 900) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    return text[:limit]
+
+
 def _get_attachment_catalog(project_id: str) -> List[Dict[str, Any]]:
     project = store.load_project_info(project_id)
+    project_dir = store.get_project_dir(project_id)
+    world_data = _safe_json_file(project_dir / "data" / "world_bible.json", {})
+    entities_data = _safe_json_file(project_dir / "data" / "entities.json", [])
+    prompts_data = _safe_json_file(project_dir / "prompts" / "prompts.json", [])
+    scene_groups = _load_scene_groups(project_id)
     attachments: List[Dict[str, Any]] = []
 
     input_file = project.get("input_file")
@@ -418,6 +827,8 @@ def _get_attachment_catalog(project_id: str) -> List[Dict[str, Any]]:
             "label": "原始小说文件",
             "kind": "file",
             "description": input_file,
+            "summary": "导入的完整小说原文文件，通常只在重建世界观时使用。",
+            "preview": _read_text_file(input_file)[:900] if Path(input_file).exists() else "",
         })
 
     attachments.append({
@@ -425,27 +836,86 @@ def _get_attachment_catalog(project_id: str) -> List[Dict[str, Any]]:
         "label": "世界观数据",
         "kind": "derived",
         "description": "world_bible.json",
+        "summary": "全书的题材、时代、末日规则、视觉风格和世界观约束。",
+        "preview": _attachment_preview_text({
+            "题材": world_data.get("genre", ""),
+            "子类型": world_data.get("sub_genre", ""),
+            "时代背景": world_data.get("era_setting", ""),
+            "科技/力量水平": world_data.get("technology_level", ""),
+            "核心概念": world_data.get("key_concepts", []),
+            "画面基调": world_data.get("tone_and_mood", ""),
+        }),
     })
     attachments.append({
         "ref": "data:entities",
-        "label": "实体数据",
+        "label": "出图对象库",
         "kind": "derived",
         "description": "entities.json",
+        "summary": f"已经识别过的出图对象库，共 {len(entities_data) if isinstance(entities_data, list) else 0} 个；用于避免重复创建，也用于持续补充已有角色设定。",
+        "preview": _attachment_preview_text([
+            {
+                "name": item.get("name", ""),
+                "type": item.get("type", ""),
+                "chapters": item.get("source_chapters", []),
+            }
+            for item in (entities_data if isinstance(entities_data, list) else [])[:12]
+        ]),
     })
     attachments.append({
         "ref": "data:prompts",
         "label": "提示词数据",
         "kind": "derived",
         "description": "prompts.json",
+        "summary": f"已经生成的绘图指令，共 {len(prompts_data) if isinstance(prompts_data, list) else 0} 条；识别出图对象阶段通常不需要。",
+        "preview": _attachment_preview_text(prompts_data[:5] if isinstance(prompts_data, list) else prompts_data),
     })
     attachments.append({
         "ref": "data:scene_groups",
-        "label": "场景分组数据",
+        "label": "场景目录",
         "kind": "derived",
         "description": "scene_groups.json",
+        "summary": f"全书已确认的场景目录，共 {len(_confirmed_scene_groups(scene_groups))} 个，用于判断当前场景处在全书哪个阶段。",
+        "preview": _attachment_preview_text([
+            {
+                "name": group.get("name", ""),
+                "chapter_range": group.get("chapter_range", ""),
+                "description": group.get("description", ""),
+            }
+            for group in _confirmed_scene_groups(scene_groups)[:12]
+        ]),
     })
 
-    for chapter in store.load_chapters(project_id)[:200]:
+    chapter_map = {
+        _chapter_number(chapter): chapter
+        for chapter in store.load_chapters(project_id)
+    }
+    for group in _confirmed_scene_groups(scene_groups):
+        chapter_range = group.get("chapter_range", "")
+        group_chapters = [
+            chapter_map.get(int(chapter))
+            for chapter in group.get("chapters", [])
+            if str(chapter).isdigit() and chapter_map.get(int(chapter))
+        ]
+        attachments.append({
+            "ref": f"scene:{group.get('id', '')}",
+            "label": f"场景：{group.get('name', '未命名场景')}",
+            "kind": "scene",
+            "description": f"第{chapter_range}章",
+            "chapter_range": chapter_range,
+            "chapters": group.get("chapters", []),
+            "summary": f"当前场景正文引用，覆盖第{chapter_range}章。识别出图对象时主要读取这里。",
+            "preview": _attachment_preview_text({
+                "场景名称": group.get("name", ""),
+                "章节范围": chapter_range,
+                "场景说明": group.get("description", ""),
+                "章节标题": [
+                    f"第{_chapter_number(chapter)}章 {chapter.get('title', '')}"
+                    for chapter in group_chapters[:20]
+                ],
+            }),
+        })
+
+    for chapter in store.load_chapters(project_id):
         chapter_number = _chapter_number(chapter)
         attachments.append({
             "ref": f"chapter:{chapter_number}",
@@ -490,7 +960,7 @@ def _resolve_attachments(project_id: str, refs: List[str]) -> List[Dict[str, str
                 if entity_path.exists():
                     attachments.append({
                         "ref": ref,
-                        "label": "实体数据",
+                        "label": "出图对象库",
                         "content": _read_text_file(str(entity_path))[:ATTACHMENT_LIMIT_CHARS],
                     })
             elif ref == "data:prompts":
@@ -506,9 +976,28 @@ def _resolve_attachments(project_id: str, refs: List[str]) -> List[Dict[str, str
                 if scene_path.exists():
                     attachments.append({
                         "ref": ref,
-                        "label": "场景分组数据",
+                        "label": "场景目录",
                         "content": _read_text_file(str(scene_path))[:ATTACHMENT_LIMIT_CHARS],
                     })
+            elif ref.startswith("scene:"):
+                scene_id = ref.split(":", 1)[1]
+                scene = next((group for group in _load_scene_groups(project_id) if str(group.get("id", "")) == scene_id), None)
+                if scene:
+                    chapter_numbers = set(int(chapter) for chapter in scene.get("chapters", []) if str(chapter).isdigit())
+                    scene_chapters = [
+                        chapter for chapter in chapters
+                        if _chapter_number(chapter) in chapter_numbers
+                    ]
+                    if scene_chapters:
+                        content = {
+                            "scene": scene,
+                            "chapters": scene_chapters,
+                        }
+                        attachments.append({
+                            "ref": ref,
+                            "label": f"当前场景正文：{scene.get('name', '未命名场景')}",
+                            "content": json.dumps(content, ensure_ascii=False, indent=2)[:ATTACHMENT_LIMIT_CHARS],
+                        })
             elif ref.startswith("chapter:"):
                 chapter_no = int(ref.split(":", 1)[1])
                 for chapter in chapters:
@@ -524,6 +1013,35 @@ def _resolve_attachments(project_id: str, refs: List[str]) -> List[Dict[str, str
             continue
 
     return attachments
+
+
+def _scene_ref_from_refs(refs: List[str]) -> Optional[str]:
+    for ref in refs:
+        if ref.startswith("scene:"):
+            return ref.split(":", 1)[1]
+    return None
+
+
+def _chapters_for_scene(project_id: str, scene_id: str) -> List[dict]:
+    scene = next((group for group in _load_scene_groups(project_id) if str(group.get("id", "")) == scene_id), None)
+    if not scene:
+        return []
+    chapter_numbers = set(int(chapter) for chapter in scene.get("chapters", []) if str(chapter).isdigit())
+    return [
+        chapter for chapter in store.load_chapters(project_id)
+        if _chapter_number(chapter) in chapter_numbers
+    ]
+
+
+def _fallback_chapter_for_request(project_id: str, request: AiPrepareRequest) -> int:
+    if request.chapter_number:
+        return request.chapter_number
+    scene_ref = _scene_ref_from_refs(request.attachment_refs)
+    if scene_ref:
+        scene_chapters = _chapters_for_scene(project_id, scene_ref)
+        if scene_chapters:
+            return min(_chapter_number(chapter) for chapter in scene_chapters)
+    return 0
 
 
 def _append_attachments(user_prompt: str, attachments: List[Dict[str, str]]) -> str:
@@ -569,11 +1087,28 @@ def _display_context(task: str, context: Dict[str, Any]) -> Dict[str, Any]:
             for chapter in display["chapters"]
         ]
 
+    if task == "character_attribute":
+        for field, label in {
+            "entity_json": "当前角色完整档案",
+            "existing_attributes": "已有角色视觉设定",
+            "chapter_appearances": "历史章节出场记录",
+            "source_quotes": "已有原文短引用",
+            "existing_prompt": "已有绘图指令",
+            "world_bible_visual_rules": "世界观角色视觉规则",
+        }.items():
+            if display.get(field):
+                display[field] = f"【已关联：{label}。点击发送给 AI 时由后端自动读取，不需要在这里展开。】"
+
     long_structured_fields = [
         "existing_entities",
         "world_framework",
         "source_evidence",
+        "source_quotes",
         "entity_json",
+        "existing_attributes",
+        "chapter_appearances",
+        "existing_prompt",
+        "world_bible_visual_rules",
         "world_bible_visual_anchoring",
         "world_bible_scene_rules",
         "world_bible_item_rules",
@@ -598,10 +1133,14 @@ def _build_execution_sources(context: Dict[str, Any], attachments: List[Dict[str
 
     add("小说正文片段", context.get("text_content"))
     add("章节正文", context.get("chapter_text"))
-    add("已有实体数据", context.get("existing_entities"))
+    add("已有出图对象库", context.get("existing_entities"))
     add("世界观框架数据", context.get("world_framework"))
     add("识别证据数据", context.get("source_evidence"))
-    add("实体 JSON", context.get("entity_json"))
+    add("当前出图对象完整档案", context.get("entity_json"))
+    add("当前角色已有视觉设定", context.get("existing_attributes"))
+    add("当前角色历史出场记录", context.get("chapter_appearances"))
+    add("当前角色已有绘图指令", context.get("existing_prompt"))
+    add("世界观角色视觉规则", context.get("world_bible_visual_rules"))
     add("世界观视觉锚定数据", context.get("world_bible_visual_anchoring"))
     add("场景视觉规则数据", context.get("world_bible_scene_rules"))
     add("物品视觉规则数据", context.get("world_bible_item_rules"))
@@ -723,15 +1262,29 @@ def _prepare_prompt(project_id: str, request: AiPrepareRequest) -> Dict[str, Any
         }
 
     elif task == "entity_extraction":
-        chapter = _find_chapter(project_id, request.chapter_number)
+        scene_ref = _scene_ref_from_refs(request.attachment_refs)
+        scene_chapters = _chapters_for_scene(project_id, scene_ref) if scene_ref else []
+        if not scene_chapters:
+            raise HTTPException(status_code=400, detail="识别出图对象必须先关联一个已确认场景正文，请在“当前场景正文”里选择场景。")
+        chapter = scene_chapters[0]
         chapter_number = _chapter_number(chapter)
+        chapter_title = chapter.get("title", "")
+        chapter_text = chapter.get("text", "")[:20000]
+        if scene_chapters:
+            numbers = [_chapter_number(item) for item in scene_chapters]
+            chapter_number = min(numbers)
+            chapter_title = f"场景章节：第{min(numbers)}-{max(numbers)}章"
+            chapter_text = "\n\n".join([
+                f"=== 第{_chapter_number(item)}章 {item.get('title', '')} ===\n{item.get('text', '')}"
+                for item in scene_chapters
+            ])[:30000]
         extraction_config = load_config().get("extraction", {})
         extractor = EntityExtractor(None, loader, extraction_config)
         extraction_level = request.extraction_level or extraction_config.get("extraction_level", "balanced")
         context = {
             "chapter_number": str(chapter_number),
-            "chapter_title": chapter.get("title", ""),
-            "chapter_text": chapter.get("text", "")[:20000],
+            "chapter_title": chapter_title,
+            "chapter_text": chapter_text,
             "world_bible_summary": _summarize_world_bible(wb),
             "existing_entities": _format_existing_entities(project_id),
             "extraction_level": extraction_level,
@@ -741,6 +1294,7 @@ def _prepare_prompt(project_id: str, request: AiPrepareRequest) -> Dict[str, Any
     elif task in ("character_attribute", "scene_attribute", "item_attribute"):
         entity = _find_entity(project_id, request.entity_id)
         if task == "character_attribute":
+            existing_prompt = _latest_prompt_for_entity(project_id, entity.get("id", ""), "character")
             visual_rules = {
                 "face_style": wb.character_visual_rules.face_style,
                 "face_style_en": wb.character_visual_rules.face_style_en,
@@ -753,7 +1307,11 @@ def _prepare_prompt(project_id: str, request: AiPrepareRequest) -> Dict[str, Any
             }
             context = {
                 "character_name": entity.get("name", ""),
+                "entity_json": json.dumps(entity, ensure_ascii=False, indent=2),
+                "existing_attributes": json.dumps(entity.get("attributes", {}), ensure_ascii=False, indent=2),
+                "chapter_appearances": _format_chapter_appearances(entity),
                 "source_quotes": _format_quotes(entity),
+                "existing_prompt": json.dumps(existing_prompt or {}, ensure_ascii=False, indent=2),
                 "world_bible_visual_rules": json.dumps(visual_rules, ensure_ascii=False),
             }
         elif task == "scene_attribute":
@@ -984,13 +1542,28 @@ def _apply_result(project_id: str, request: AiRunRequest, parsed: Dict[str, Any]
         entities = store.load_entities(project_id)
         for idx, current in enumerate(entities):
             if current.get("id") == entity.get("id"):
+                if request.task == "character_attribute":
+                    merge_stats = _merge_character_attribute_result(current, parsed, request)
+                    entities[idx] = current
+                    store.save_entities(project_id, entities)
+                    return {
+                        "target": "entity",
+                        "message": (
+                            "已合并角色视觉设定"
+                            f"：新增 {merge_stats['added_source_quotes']} 条引用、"
+                            f"{merge_stats['added_chapter_appearances']} 条章节/阶段记录。"
+                            "如需用于生图，请重新生成该角色绘图指令。"
+                        ),
+                        "entity_id": current.get("id"),
+                        **merge_stats,
+                    }
                 current["attributes"] = parsed.get("attributes", parsed)
                 entities[idx] = current
                 store.save_entities(project_id, entities)
                 return {"target": "entity", "message": "已更新实体属性", "entity_id": current.get("id")}
 
     if request.task == "entity_extraction":
-        candidates = _parse_entity_candidates(parsed, request.chapter_number or 0)
+        candidates = _parse_entity_candidates(parsed, _fallback_chapter_for_request(project_id, request))
         existing = [Entity(**entity) for entity in store.load_entities(project_id)]
         merged = EntityMerger().merge(candidates, existing, project_id=project_id)
         store.save_entities(project_id, [entity.model_dump() for entity in merged])
@@ -1132,6 +1705,25 @@ async def list_ai_attachments(project_id: str):
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
     return {"attachments": _get_attachment_catalog(project_id)}
+
+
+@router.post("/{project_id}/ai/attachment-content")
+async def get_ai_attachment_content(project_id: str, request: AiAttachmentContentRequest):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    attachments = _resolve_attachments(project_id, [request.ref])
+    if not attachments:
+        raise HTTPException(status_code=404, detail=f"关联内容不存在: {request.ref}")
+
+    attachment = attachments[0]
+    content = attachment.get("content", "")
+    return {
+        "ref": attachment.get("ref", request.ref),
+        "label": attachment.get("label", request.ref),
+        "content": content,
+        "chars": len(content),
+    }
 
 
 @router.get("/{project_id}/ai/runs")

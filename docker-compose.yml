@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-novel-illustrator-backend
+    restart: unless-stopped
+    volumes:
+      - ./projects:/app/projects
+      - ./output:/app/output
+      - ./config/user.yaml:/app/config/user.yaml
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        VITE_API_BASE: /api
+    container_name: ai-novel-illustrator-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8888:80"

@@ -38,8 +38,9 @@ user_prompt: |
   1. 世界观前缀必须包含：画风、色彩体系、氛围关键词、禁止元素
   2. 面容独立块必须精确包含：脸型、肤色、眉眼、标志性特征、发色发型
   3. 面容独立块末尾标注"（面容锁定：此面容在所有图中保持一致）"
-  4. 服饰描述必须与属性档案 clothing.default 一致
-  5. 所有视觉描述必须忠实于原文，不得凭空捏造
-  6. 禁止出现 WorldBible 中的 forbidden_elements
-  7. negative_prompt 必须包含 forbidden_elements
-  8. parameters 中的 aspect_ratio：角色用 3:4，场景用 16:9，物品用 1:1
+  4. 如果属性档案包含 stage_changes、chapter_appearances 或 _refinement，请优先采用已合并后的稳定设定；阶段性服装、伤势、装备变化只在原文明确需要时加入，不要覆盖稳定面容。
+  5. 服饰描述必须与属性档案 clothing.default 一致；如果默认服饰证据不足，请写成“原文未明确，保持中性服饰设定”，不要套用古风/玄幻模板。
+  6. 所有视觉描述必须忠实于原文，不得凭空捏造
+  7. 禁止出现 WorldBible 中的 forbidden_elements
+  8. negative_prompt 必须包含 forbidden_elements
+  9. parameters 中的 aspect_ratio：角色用 3:4，场景用 16:9，物品用 1:1

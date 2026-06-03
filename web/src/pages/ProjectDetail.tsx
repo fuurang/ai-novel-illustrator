@@ -13,6 +13,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
+  Trash2,
   Users,
   Globe,
   X,
@@ -73,10 +74,11 @@ export default function ProjectDetail() {
   const [chapterDetail, setChapterDetail] = useState<any>(null)
   const [chapterLoading, setChapterLoading] = useState(false)
   const [sceneGroups, setSceneGroups] = useState<any[]>([])
-  const [aiLaunch, setAiLaunch] = useState<{ task: string; instruction: string; extractionLevel?: string; sceneGranularity?: string } | null>(null)
+  const [aiLaunch, setAiLaunch] = useState<{ task: string; instruction: string; extractionLevel?: string; sceneGranularity?: string; sceneId?: string } | null>(null)
   const [guideCollapsed, setGuideCollapsed] = useState(false)
   const [chapterListCollapsed, setChapterListCollapsed] = useState(false)
   const [entityViewMode, setEntityViewMode] = useState<EntityViewMode>('large')
+  const [selectedEntityIds, setSelectedEntityIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (id) selectProject(id)
@@ -155,6 +157,15 @@ export default function ProjectDetail() {
     }
     loadData()
   }, [id, activeTab, entityType])
+
+  useEffect(() => {
+    setSelectedEntityIds((current) => {
+      if (!current.size) return current
+      const visibleIds = new Set(entities.map((entity) => entity.id))
+      const next = new Set([...current].filter((entityId) => visibleIds.has(entityId)))
+      return next.size === current.size ? current : next
+    })
+  }, [entities])
 
   const withImageVersion = (entity: any, imageVersion?: number) => {
     if (!imageVersion || !entity?.image_url) return entity
@@ -313,6 +324,101 @@ export default function ProjectDetail() {
     }
   }
 
+  const handleEntityDelete = async (entity: any) => {
+    if (!id || !entity?.id) return
+    if (generatingEntityIds.has(entity.id)) {
+      window.alert('这个对象正在生成图片，完成后再删除。')
+      return
+    }
+    const name = entity.name || '未命名出图对象'
+    const confirmed = window.confirm(`确定删除“${name}”吗？\n\n会删除这个出图对象和对应绘图指令，但不会删除已经生成的图片文件。`)
+    if (!confirmed) return
+
+    try {
+      await api.entities.delete(id, entity.id)
+      setEntities((current) => current.filter((item) => item.id !== entity.id))
+      setSelectedEntityIds((current) => {
+        const next = new Set(current)
+        next.delete(entity.id)
+        return next
+      })
+      setSelectedEntity((current: any) => (current?.id === entity.id ? null : current))
+      if (selectedEntity?.id === entity.id) setDrawerOpen(false)
+      setPreviewImage((current) => (current?.entity?.id === entity.id ? null : current))
+      if (activeTab === 'gallery') {
+        const data = await api.images.list(id)
+        setImages(data)
+      }
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '删除出图对象失败')
+    }
+  }
+
+  const toggleEntitySelection = (entityId: string, checked: boolean) => {
+    setSelectedEntityIds((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(entityId)
+      } else {
+        next.delete(entityId)
+      }
+      return next
+    })
+  }
+
+  const setAllVisibleEntitySelection = (checked: boolean) => {
+    setSelectedEntityIds((current) => {
+      const next = new Set(current)
+      entities.forEach((entity) => {
+        if (checked) {
+          next.add(entity.id)
+        } else {
+          next.delete(entity.id)
+        }
+      })
+      return next
+    })
+  }
+
+  const handleBulkEntityDelete = async () => {
+    if (!id || selectedEntityIds.size === 0) return
+    const selectedIds = [...selectedEntityIds]
+    const generatingIds = selectedIds.filter((entityId) => generatingEntityIds.has(entityId))
+    if (generatingIds.length > 0) {
+      window.alert(`有 ${generatingIds.length} 个对象正在生成图片，完成后再删除。`)
+      return
+    }
+
+    const selectedNames = entities
+      .filter((entity) => selectedEntityIds.has(entity.id))
+      .slice(0, 5)
+      .map((entity) => entity.name || '未命名出图对象')
+      .join('、')
+    const targetLabel = selectedIds.length > 5
+      ? `${selectedNames} 等 ${selectedIds.length} 个`
+      : `${selectedNames || `${selectedIds.length} 个`}`
+    const confirmed = window.confirm(
+      `确定批量删除这些出图对象吗？\n${targetLabel}\n\n会删除对应绘图指令，但不会删除已经生成的图片文件。`
+    )
+    if (!confirmed) return
+
+    try {
+      const result = await api.entities.bulkDelete(id, selectedIds)
+      const deletedIds = new Set(result.deleted_entity_ids || selectedIds)
+      setEntities((current) => current.filter((entity) => !deletedIds.has(entity.id)))
+      setSelectedEntityIds(new Set())
+      setSelectedEntity((current: any) => (current && deletedIds.has(current.id) ? null : current))
+      if (selectedEntity && deletedIds.has(selectedEntity.id)) setDrawerOpen(false)
+      setPreviewImage((current) => (current?.entity?.id && deletedIds.has(current.entity.id) ? null : current))
+      if (activeTab === 'gallery') {
+        const data = await api.images.list(id)
+        setImages(data)
+      }
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '批量删除出图对象失败')
+    }
+  }
+
   const chapterText = chapterDetail?.chapter?.text || chapterDetail?.content || chapterDetail?.text || ''
   const chapterTitle = chapterDetail?.chapter?.title || chapterDetail?.title || ''
   const confirmedSceneCount = sceneGroups.filter((group) => group.source === 'ai' || group.source === 'manual').length
@@ -325,6 +431,24 @@ export default function ProjectDetail() {
   const unlockedEntityCount = entities.filter((entity) => !entity.image_locked).length
   const lockedEntityCount = entities.length - unlockedEntityCount
   const isBatchGenerating = generatingEntityIds.size > 0
+  const selectedEntityCount = selectedEntityIds.size
+  const allVisibleEntitiesSelected = entities.length > 0 && entities.every((entity) => selectedEntityIds.has(entity.id))
+  const previewableEntities = entities.filter((entity) => entity.image_url)
+  const previewIndex = previewImage
+    ? previewableEntities.findIndex((entity) => entity.id === previewImage.entity?.id)
+    : -1
+  const canSwitchPreview = previewableEntities.length > 1 && previewIndex >= 0
+
+  const showAdjacentPreview = (direction: -1 | 1) => {
+    if (!canSwitchPreview) return
+    const nextIndex = (previewIndex + direction + previewableEntities.length) % previewableEntities.length
+    const nextEntity = previewableEntities[nextIndex]
+    setPreviewImage({
+      url: nextEntity.image_url,
+      name: nextEntity.name || '出图对象',
+      entity: nextEntity,
+    })
+  }
 
   useEffect(() => {
     if (activeTab === 'ai') {
@@ -332,6 +456,21 @@ export default function ProjectDetail() {
       setChapterListCollapsed(true)
     }
   }, [activeTab])
+
+  useEffect(() => {
+    if (!previewImage) return
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setPreviewImage(null)
+      } else if (event.key === 'ArrowLeft') {
+        showAdjacentPreview(-1)
+      } else if (event.key === 'ArrowRight') {
+        showAdjacentPreview(1)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [previewImage, canSwitchPreview, previewIndex, previewableEntities.length])
 
   return (
     <div className="flex flex-col h-full">
@@ -345,6 +484,7 @@ export default function ProjectDetail() {
                 instruction: '',
                 extractionLevel: options.extractionLevel,
                 sceneGranularity: options.sceneGranularity,
+                sceneId: options.sceneId,
               })
             }
             setActiveTab('ai')
@@ -495,6 +635,7 @@ export default function ProjectDetail() {
               initialInstruction={aiLaunch?.instruction}
               initialExtractionLevel={aiLaunch?.extractionLevel}
               initialSceneGranularity={aiLaunch?.sceneGranularity}
+              initialSceneId={aiLaunch?.sceneId}
               onInitialHandled={() => setAiLaunch(null)}
             />
           )}
@@ -539,9 +680,37 @@ export default function ProjectDetail() {
                     <p className="text-xs text-text-muted mt-0.5">
                       点击卡片查看图片，生成和保存需要点右侧按钮。
                       {lockedEntityCount > 0 && ` 已保存 ${lockedEntityCount} 个。`}
+                      {selectedEntityCount > 0 && ` 已选择 ${selectedEntityCount} 个。`}
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setAllVisibleEntitySelection(!allVisibleEntitiesSelected)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary hover:text-text-primary hover:bg-elevated"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={allVisibleEntitiesSelected}
+                        readOnly
+                        className="h-3.5 w-3.5 accent-orange-500"
+                      />
+                      {allVisibleEntitiesSelected ? '取消全选' : '全选当前'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedEntityCount === 0}
+                      onClick={handleBulkEntityDelete}
+                      className={cn(
+                        'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs transition-colors',
+                        selectedEntityCount === 0
+                          ? 'cursor-not-allowed border-border bg-elevated/50 text-text-muted'
+                          : 'border-error/40 bg-error/10 text-error hover:bg-error/15'
+                      )}
+                    >
+                      <Trash2 size={14} />
+                      删除选中
+                    </button>
                     <button
                       type="button"
                       title="只重抽当前筛选下未保存的对象"
@@ -623,7 +792,8 @@ export default function ProjectDetail() {
                 ) : (
                   entityViewMode === 'details' ? (
                     <div className="flex-1 overflow-y-auto rounded-lg border border-border bg-surface">
-                      <div className="sticky top-0 z-10 grid grid-cols-[minmax(180px,1.1fr)_88px_88px_minmax(220px,1.5fr)_112px_172px] gap-3 border-b border-border bg-elevated px-3 py-2 text-xs font-medium text-text-muted">
+                      <div className="sticky top-0 z-10 grid grid-cols-[32px_minmax(180px,1.1fr)_88px_88px_minmax(220px,1.5fr)_112px_172px] gap-3 border-b border-border bg-elevated px-3 py-2 text-xs font-medium text-text-muted">
+                        <div></div>
                         <div>名称</div>
                         <div>类型</div>
                         <div>章节</div>
@@ -641,10 +811,13 @@ export default function ProjectDetail() {
                               ? 'generating'
                               : entity.image_status,
                           }}
+                          selected={selectedEntityIds.has(entity.id)}
+                          onSelectChange={(checked) => toggleEntitySelection(entity.id, checked)}
                           onClick={() => handleEntityView(entity)}
                           onGenerate={() => handleEntityGenerate(entity)}
                           onToggleLock={(locked) => handleEntityLock(entity, locked)}
                           onInspect={() => handleEntityInspect(entity)}
+                          onDelete={() => handleEntityDelete(entity)}
                         />
                       ))}
                     </div>
@@ -667,10 +840,13 @@ export default function ProjectDetail() {
                               ? 'generating'
                               : entity.image_status,
                           }}
+                          selected={selectedEntityIds.has(entity.id)}
+                          onSelectChange={(checked) => toggleEntitySelection(entity.id, checked)}
                           onClick={() => handleEntityView(entity)}
                           onGenerate={() => handleEntityGenerate(entity)}
                           onToggleLock={(locked) => handleEntityLock(entity, locked)}
                           onInspect={() => handleEntityInspect(entity)}
+                          onDelete={() => handleEntityDelete(entity)}
                         />
                       ))}
                     </div>
@@ -701,6 +877,11 @@ export default function ProjectDetail() {
             <div className="flex items-center justify-between gap-3 text-white">
               <div className="min-w-0">
                 <div className="truncate text-sm font-medium">{previewImage.name}</div>
+                {canSwitchPreview && (
+                  <div className="mt-1 text-xs text-white/60">
+                    {previewIndex + 1} / {previewableEntities.length}
+                  </div>
+                )}
                 {previewImage.entity?.image_locked && (
                   <div className="mt-1 inline-flex items-center gap-1 text-xs text-success">
                     <Lock size={12} />
@@ -746,11 +927,37 @@ export default function ProjectDetail() {
               </div>
             </div>
             <div className="flex min-h-0 items-center justify-center overflow-hidden rounded-lg border border-white/15 bg-black">
+              {canSwitchPreview && (
+                <button
+                  type="button"
+                  title="上一张"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    showAdjacentPreview(-1)
+                  }}
+                  className="absolute left-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+                >
+                  <ChevronLeft size={24} />
+                </button>
+              )}
               <img
                 src={previewImage.url}
                 alt={previewImage.name}
                 className="max-h-[82vh] max-w-[96vw] object-contain"
               />
+              {canSwitchPreview && (
+                <button
+                  type="button"
+                  title="下一张"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    showAdjacentPreview(1)
+                  }}
+                  className="absolute right-3 top-1/2 z-10 inline-flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20"
+                >
+                  <ChevronRight size={24} />
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -760,6 +967,7 @@ export default function ProjectDetail() {
         entity={selectedEntity}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
+        onDelete={selectedEntity ? () => handleEntityDelete(selectedEntity) : undefined}
       />
     </div>
   )

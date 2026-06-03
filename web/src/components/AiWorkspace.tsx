@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Bot, CheckCircle, Eye, FileText, Loader2, MessageSquare, Play, RefreshCw, RotateCcw } from 'lucide-react'
+import { AlertCircle, Bot, CheckCircle, Eye, FileText, Layers, Loader2, MessageSquare, Play, RefreshCw, RotateCcw } from 'lucide-react'
 import { api } from '@/api/client'
 
 interface AiWorkspaceProps {
@@ -9,6 +9,7 @@ interface AiWorkspaceProps {
   initialInstruction?: string
   initialExtractionLevel?: string
   initialSceneGranularity?: string
+  initialSceneId?: string
   onInitialHandled?: () => void
 }
 
@@ -18,8 +19,8 @@ const inputClass =
 const textareaClass =
   'w-full bg-elevated border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent resize-y'
 
-const taskDefaults: Record<string, { needsChapter?: boolean; needsEntity?: boolean; applyable?: boolean }> = {
-  entity_extraction: { needsChapter: true },
+const taskDefaults: Record<string, { needsEntity?: boolean; applyable?: boolean }> = {
+  entity_extraction: {},
   scene_segmentation: { applyable: true },
   character_attribute: { needsEntity: true, applyable: true },
   scene_attribute: { needsEntity: true, applyable: true },
@@ -58,6 +59,7 @@ export default function AiWorkspace({
   initialInstruction,
   initialExtractionLevel,
   initialSceneGranularity,
+  initialSceneId,
   onInitialHandled,
 }: AiWorkspaceProps) {
   const [tasks, setTasks] = useState<any[]>([])
@@ -65,8 +67,11 @@ export default function AiWorkspace({
   const [entities, setEntities] = useState<any[]>([])
   const [attachments, setAttachments] = useState<any[]>([])
   const [attachmentRefs, setAttachmentRefs] = useState<string[]>([])
+  const [selectedSceneRef, setSelectedSceneRef] = useState('')
+  const [previewAttachmentRef, setPreviewAttachmentRef] = useState('')
+  const [fullContent, setFullContent] = useState<any>(null)
+  const [fullContentLoading, setFullContentLoading] = useState(false)
   const [selectedTask, setSelectedTask] = useState('world_bible_analyze')
-  const [chapterNumber, setChapterNumber] = useState<number>(selectedChapter || 1)
   const [entityId, setEntityId] = useState('')
   const [extractionLevel, setExtractionLevel] = useState('balanced')
   const [sceneGranularity, setSceneGranularity] = useState('medium')
@@ -83,10 +88,6 @@ export default function AiWorkspace({
   const [applyResult, setApplyResult] = useState(false)
 
   useEffect(() => {
-    if (selectedChapter) setChapterNumber(selectedChapter)
-  }, [selectedChapter])
-
-  useEffect(() => {
     if (!projectId) return
     loadBaseData()
   }, [projectId])
@@ -97,12 +98,13 @@ export default function AiWorkspace({
     if (initialInstruction) setExtraInstruction(initialInstruction)
     if (initialExtractionLevel) setExtractionLevel(initialExtractionLevel)
     if (initialSceneGranularity) setSceneGranularity(initialSceneGranularity)
+    if (initialSceneId) setSelectedSceneRef(`scene:${initialSceneId}`)
     setPrepared(null)
     setCurrentRun(null)
     setEditableSystemPrompt('')
     setEditableUserPrompt('')
     onInitialHandled?.()
-  }, [initialTask, initialInstruction, initialExtractionLevel, initialSceneGranularity, onInitialHandled])
+  }, [initialTask, initialInstruction, initialExtractionLevel, initialSceneGranularity, initialSceneId, onInitialHandled])
 
   const selectedTaskMeta = useMemo(
     () => tasks.find((task) => task.key === selectedTask),
@@ -118,25 +120,64 @@ export default function AiWorkspace({
     return entities
   }, [entities, selectedTask])
 
+  const sceneAttachments = useMemo(
+    () => attachments.filter((item) => item.kind === 'scene'),
+    [attachments]
+  )
+
+  const dataAttachments = useMemo(
+    () => attachments.filter((item) => item.kind !== 'chapter' && item.kind !== 'scene'),
+    [attachments]
+  )
+
+  const usesCurrentScene = selectedTask === 'entity_extraction' || selectedTask === 'character_attribute'
+
+  const recommendedAttachmentRefs = useMemo(() => {
+    if (!attachments.length) return []
+    const has = (ref: string) => attachments.some((item) => item.ref === ref)
+    if (selectedTask === 'world_bible_analyze') {
+      return has('file:input') ? ['file:input'] : []
+    }
+    if (selectedTask === 'visual_anchoring') {
+      return has('data:world_bible') ? ['data:world_bible'] : []
+    }
+    if (selectedTask === 'entity_extraction') {
+      const refs = ['data:world_bible', 'data:scene_groups', 'data:entities'].filter(has)
+      if (selectedSceneRef && has(selectedSceneRef)) {
+        refs.splice(2, 0, selectedSceneRef)
+      }
+      return refs
+    }
+    if (selectedTask === 'character_attribute') {
+      const refs = ['data:world_bible', 'data:entities', 'data:scene_groups', 'data:prompts'].filter(has)
+      if (selectedSceneRef && has(selectedSceneRef)) {
+        refs.splice(2, 0, selectedSceneRef)
+      }
+      return refs
+    }
+    if (selectedTask === 'scene_segmentation') {
+      return []
+    }
+    if (selectedTask.includes('attribute') || selectedTask.includes('prompt')) {
+      return ['data:world_bible', 'data:entities', 'data:scene_groups'].filter(has)
+    }
+    return []
+  }, [attachments, selectedTask, selectedSceneRef])
+
   useEffect(() => {
     if (!attachments.length) return
-    if (selectedTask === 'world_bible_analyze') {
-      setAttachmentRefs(attachments.some((item) => item.ref === 'file:input') ? ['file:input'] : [])
-    } else if (selectedTask === 'visual_anchoring') {
-      setAttachmentRefs(attachments.some((item) => item.ref === 'data:world_bible') ? ['data:world_bible'] : [])
-    } else if (selectedTask === 'entity_extraction') {
-      const chapterRef = `chapter:${chapterNumber || 1}`
-      setAttachmentRefs(attachments.some((item) => item.ref === chapterRef) ? [chapterRef] : [])
-    } else if (selectedTask === 'scene_segmentation') {
-      setAttachmentRefs([])
-    } else if (selectedTask.includes('attribute') || selectedTask.includes('prompt')) {
-      setAttachmentRefs(['data:world_bible', 'data:entities'].filter((ref) => attachments.some((item) => item.ref === ref)))
+    if (!selectedSceneRef && sceneAttachments.length > 0) {
+      setSelectedSceneRef(sceneAttachments[0].ref)
     }
-  }, [selectedTask, attachments])
+  }, [attachments, sceneAttachments, selectedSceneRef])
+
+  useEffect(() => {
+    setAttachmentRefs(recommendedAttachmentRefs)
+  }, [recommendedAttachmentRefs])
 
   const buildPayload = () => ({
     task: selectedTask,
-    chapter_number: selectedTask === 'scene_segmentation' ? undefined : chapterNumber,
+    chapter_number: undefined,
     start_chapter: undefined,
     entity_id: entityId || undefined,
     extraction_level: extractionLevel,
@@ -170,6 +211,112 @@ export default function AiWorkspace({
     setAttachmentRefs((current) =>
       current.includes(ref) ? current.filter((item) => item !== ref) : [...current, ref]
     )
+  }
+
+  const addAttachmentRef = (ref: string) => {
+    setAttachmentRefs((current) => (current.includes(ref) ? current : [...current, ref]))
+  }
+
+  const removeAttachmentRef = (ref: string) => {
+    setAttachmentRefs((current) => current.filter((item) => item !== ref))
+  }
+
+  const renderAttachmentRow = (attachment: any) => (
+    <div
+      key={attachment.ref}
+      className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-elevated"
+    >
+      <label className="flex items-start gap-2 min-w-0 flex-1 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={attachmentRefs.includes(attachment.ref)}
+          onChange={() => toggleAttachment(attachment.ref)}
+          className="mt-0.5 accent-orange-500"
+        />
+        <span className="min-w-0">
+          <span className="flex items-center gap-1.5 text-sm text-text-secondary">
+            <FileText size={13} className="shrink-0" />
+            <span className="truncate">{attachment.label}</span>
+          </span>
+          {attachment.description && (
+            <span className="block text-[11px] text-text-muted truncate">{attachment.description}</span>
+          )}
+          {attachment.summary && (
+            <span className="block text-[11px] text-text-muted line-clamp-2">{attachment.summary}</span>
+          )}
+        </span>
+      </label>
+      <button
+        type="button"
+        onClick={() => setPreviewAttachmentRef(attachment.ref)}
+        className="shrink-0 text-[11px] text-accent hover:text-accent-hover"
+      >
+        查看
+      </button>
+    </div>
+  )
+
+  const previewAttachment = useMemo(
+    () => attachments.find((item) => item.ref === previewAttachmentRef) || null,
+    [attachments, previewAttachmentRef]
+  )
+
+  const renderAttachmentPreview = () => {
+    if (!previewAttachment) {
+      return (
+        <div className="rounded-md border border-border bg-surface p-3 text-xs text-text-muted">
+          点击关联项右侧“查看”，这里会显示这个文件的作用和内容预览。
+        </div>
+      )
+    }
+    return (
+      <div className="rounded-md border border-border bg-surface p-3">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-sm font-medium text-text-primary">
+              <FileText size={14} className="shrink-0" />
+              <span className="truncate">{previewAttachment.label}</span>
+            </div>
+            <div className="mt-1 text-[11px] text-text-muted">{previewAttachment.description}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPreviewAttachmentRef('')}
+            className="text-[11px] text-text-muted hover:text-text-secondary"
+          >
+            关闭
+          </button>
+        </div>
+        {previewAttachment.summary && (
+          <p className="mt-2 text-xs leading-relaxed text-text-secondary">{previewAttachment.summary}</p>
+        )}
+        {previewAttachment.preview && (
+          <pre className="mt-2 max-h-52 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-border bg-base p-2 text-[11px] leading-relaxed text-text-muted">
+            {previewAttachment.preview}
+          </pre>
+        )}
+        <button
+          type="button"
+          onClick={() => loadFullAttachmentContent(previewAttachment.ref)}
+          className="mt-2 text-xs text-accent hover:text-accent-hover"
+        >
+          查看完整内容
+        </button>
+      </div>
+    )
+  }
+
+  const loadFullAttachmentContent = async (ref: string) => {
+    setFullContentLoading(true)
+    setError('')
+    try {
+      const data = await api.ai.attachmentContent(projectId, ref)
+      setFullContent(data)
+    } catch (e: any) {
+      setError(e.message || '读取完整内容失败')
+    } finally {
+      setFullContentLoading(false)
+    }
   }
 
   const handlePrepare = async () => {
@@ -219,8 +366,14 @@ export default function AiWorkspace({
       setEditableSystemPrompt(data.run.system_prompt || '')
       setEditableUserPrompt(data.run.user_prompt || '')
       setFollowupRunId(null)
-      const runList = await api.ai.runs(projectId)
+      const [runList, entityList, attachmentList] = await Promise.all([
+        api.ai.runs(projectId),
+        api.entities.list(projectId),
+        api.ai.attachments(projectId),
+      ])
       setRuns(runList)
+      setEntities(entityList)
+      setAttachments(attachmentList)
     } catch (e: any) {
       setError(e.message || 'AI 运行失败')
     } finally {
@@ -235,8 +388,14 @@ export default function AiWorkspace({
     try {
       const data = await api.ai.apply(projectId, currentRun.id)
       setCurrentRun(data.run)
-      const runList = await api.ai.runs(projectId)
+      const [runList, entityList, attachmentList] = await Promise.all([
+        api.ai.runs(projectId),
+        api.entities.list(projectId),
+        api.ai.attachments(projectId),
+      ])
       setRuns(runList)
+      setEntities(entityList)
+      setAttachments(attachmentList)
     } catch (e: any) {
       setError(e.message || '应用结果失败')
     } finally {
@@ -261,6 +420,7 @@ export default function AiWorkspace({
 
     const candidates = [
       parsed.readable_report,
+      parsed.analysis?.readable_report,
       parsed.report,
       parsed.summary,
       parsed.analysis_summary,
@@ -280,6 +440,9 @@ export default function AiWorkspace({
       'evidence',
       'setting_evidence',
       'visual_evidence',
+      'speech_action_evidence',
+      'stage_changes',
+      'missing_info',
       'conflicts',
       'uncertainties',
       'revision_suggestions',
@@ -289,6 +452,12 @@ export default function AiWorkspace({
     keys.forEach((key) => {
       if (parsed[key] !== undefined && key !== 'readable_report') picked[key] = parsed[key]
     })
+    if (parsed.attributes?.stage_changes && picked.stage_changes === undefined) {
+      picked.stage_changes = parsed.attributes.stage_changes
+    }
+    if (parsed.attributes?._refinement && picked.refinement === undefined) {
+      picked.refinement = parsed.attributes._refinement
+    }
     return Object.keys(picked).length ? picked : null
   }, [currentRun])
 
@@ -314,7 +483,7 @@ export default function AiWorkspace({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         <div className="rounded-lg border border-border bg-base px-3 py-2">
           <div className="text-xs font-medium text-text-primary">1. 选择关联文件</div>
-          <div className="text-[11px] text-text-muted mt-1">勾选原始小说、章节或项目数据，后端会自动读取。</div>
+          <div className="text-[11px] text-text-muted mt-1">按任务自动推荐世界观、当前场景正文和项目数据。</div>
         </div>
         <div className="rounded-lg border border-border bg-base px-3 py-2">
           <div className="text-xs font-medium text-text-primary">2. 确认 API 指令</div>
@@ -366,19 +535,6 @@ export default function AiWorkspace({
                 </div>
               )}
             </div>
-
-            {selectedRules.needsChapter && (
-              <div>
-                <label className="block text-sm font-medium text-text-secondary mb-1.5">章节</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={chapterNumber}
-                  onChange={(e) => setChapterNumber(Number(e.target.value) || 1)}
-                  className={inputClass}
-                />
-              </div>
-            )}
 
             {selectedTask === 'entity_extraction' && (
               <div>
@@ -458,40 +614,89 @@ export default function AiWorkspace({
 
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1.5">关联文件</label>
-              <div className="max-h-48 overflow-y-auto rounded-lg border border-border bg-base p-2 space-y-1">
+              <div className="rounded-lg border border-border bg-base p-2 space-y-3">
                 {attachments.length === 0 ? (
                   <div className="text-xs text-text-muted px-2 py-3">暂无可关联文件</div>
                 ) : (
-                  attachments.map((attachment) => (
-                    <label
-                      key={attachment.ref}
-                      className="flex items-start gap-2 px-2 py-1.5 rounded-md hover:bg-elevated cursor-pointer"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={attachmentRefs.includes(attachment.ref)}
-                        onChange={() => toggleAttachment(attachment.ref)}
-                        className="mt-0.5 accent-orange-500"
-                      />
-                      <span className="min-w-0">
-                        <span className="flex items-center gap-1.5 text-sm text-text-secondary">
-                          <FileText size={13} className="shrink-0" />
-                          <span className="truncate">{attachment.label}</span>
-                        </span>
-                        {attachment.description && (
-                          <span className="block text-[11px] text-text-muted truncate">{attachment.description}</span>
+                  <>
+                    <div>
+                      <div className="flex items-center justify-between gap-2 px-1 mb-1.5">
+                        <span className="text-xs font-medium text-text-primary">推荐关联</span>
+                        <button
+                          type="button"
+                          onClick={() => setAttachmentRefs(recommendedAttachmentRefs)}
+                          className="text-[11px] text-accent hover:text-accent-hover"
+                        >
+                          恢复推荐
+                        </button>
+                      </div>
+                      <div className="space-y-1">
+                        {recommendedAttachmentRefs.length === 0 ? (
+                          <div className="text-[11px] text-text-muted px-2 py-1.5">当前任务不需要额外关联文件。</div>
+                        ) : (
+                          recommendedAttachmentRefs
+                            .map((ref) => attachments.find((item) => item.ref === ref))
+                            .filter(Boolean)
+                            .map(renderAttachmentRow)
                         )}
-                      </span>
-                    </label>
-                  ))
+                      </div>
+                    </div>
+
+                    {usesCurrentScene && (
+                      <div className="rounded-md border border-border bg-surface p-2">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-text-primary mb-2">
+                          <Layers size={13} />
+                          当前场景正文
+                        </div>
+                        {sceneAttachments.length === 0 ? (
+                          <div className="text-[11px] text-text-muted">
+                            {selectedTask === 'entity_extraction'
+                              ? '还没有已确认场景，请先完成智能分场景。'
+                              : '还没有已确认场景；也可以只用已有引用精修，但建议先完成智能分场景。'}
+                          </div>
+                        ) : (
+                          <select
+                            value={selectedSceneRef}
+                            onChange={(event) => {
+                              const nextRef = event.target.value
+                              if (selectedSceneRef) removeAttachmentRef(selectedSceneRef)
+                              setSelectedSceneRef(nextRef)
+                              addAttachmentRef(nextRef)
+                            }}
+                            className={inputClass}
+                          >
+                            {sceneAttachments.map((scene) => (
+                              <option key={scene.ref} value={scene.ref}>
+                                {scene.label}（{scene.description}）
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <p className="mt-1.5 text-[11px] text-text-muted">
+                          {selectedTask === 'entity_extraction'
+                            ? '识别出图对象时优先使用当前场景覆盖的章节正文，不需要从章节列表里逐章勾选。'
+                            : '精修角色时会从这个场景里提取语言、动作、状态和外观变化，追加到同一个出图对象档案。'}
+                        </p>
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="text-xs font-medium text-text-primary px-1 mb-1.5">项目数据</div>
+                      <div className="space-y-1">
+                        {dataAttachments.map(renderAttachmentRow)}
+                      </div>
+                    </div>
+
+                    {renderAttachmentPreview()}
+                  </>
                 )}
               </div>
               <div className="flex gap-2 mt-2">
                 <button
-                  onClick={() => setAttachmentRefs(attachments.map((item) => item.ref))}
+                  onClick={() => setAttachmentRefs(recommendedAttachmentRefs)}
                   className="text-xs text-accent hover:text-accent-hover"
                 >
-                  全选
+                  只用推荐
                 </button>
                 <button
                   onClick={() => setAttachmentRefs([])}
@@ -502,6 +707,38 @@ export default function AiWorkspace({
               </div>
             </div>
 
+            {(fullContent || fullContentLoading) && (
+              <div className="rounded-lg border border-border bg-base p-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-text-primary">完整内容</div>
+                    {fullContent?.label && (
+                      <div className="text-[11px] text-text-muted truncate">
+                        {fullContent.label} · {fullContent.chars || 0} 字符
+                      </div>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setFullContent(null)}
+                    className="text-xs text-text-muted hover:text-text-secondary"
+                  >
+                    关闭
+                  </button>
+                </div>
+                {fullContentLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-text-muted">
+                    <Loader2 size={13} className="animate-spin" />
+                    正在读取完整内容...
+                  </div>
+                ) : (
+                  <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-surface p-3 text-xs leading-relaxed text-text-secondary">
+                    {fullContent?.content || ''}
+                  </pre>
+                )}
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-text-secondary mb-1.5">追问 / 微调要求</label>
               <textarea
@@ -509,7 +746,7 @@ export default function AiWorkspace({
                 onChange={(e) => setExtraInstruction(e.target.value)}
                 rows={5}
                 className={textareaClass}
-                placeholder="这里只写你要调整的方向即可。原始小说、章节、世界观、出图对象和绘图指令都在上方勾选关联文件，不需要粘贴原文。"
+                placeholder="这里只写你要调整的方向即可，例如“继续用当前场景补这个人物的动作气质和服装变化”。当前场景正文、世界观、出图对象和绘图指令都在上方勾选关联文件，不需要粘贴原文。"
               />
             </div>
 

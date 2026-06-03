@@ -1,4 +1,4 @@
-import { X, Image, FileText, BookOpen, Quote } from 'lucide-react'
+import { X, Image, FileText, BookOpen, Quote, Trash2 } from 'lucide-react'
 import { useEffect } from 'react'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +21,7 @@ interface EntityDrawerProps {
   } | null
   open: boolean
   onClose: () => void
+  onDelete?: () => void
 }
 
 const typeLabels: Record<string, string> = {
@@ -29,7 +30,7 @@ const typeLabels: Record<string, string> = {
   item: '物品',
 }
 
-export default function EntityDrawer({ entity, open, onClose }: EntityDrawerProps) {
+export default function EntityDrawer({ entity, open, onClose, onDelete }: EntityDrawerProps) {
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
@@ -59,12 +60,23 @@ export default function EntityDrawer({ entity, open, onClose }: EntityDrawerProp
             <h3 className="text-lg font-semibold text-text-primary">{entity.name}</h3>
             <span className="text-xs text-text-muted">{typeLabels[entity.type] || entity.type}</span>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-elevated text-text-secondary transition-colors duration-200"
-          >
-            <X size={18} />
-          </button>
+          <div className="flex items-center gap-1">
+            {onDelete && (
+              <button
+                onClick={onDelete}
+                className="p-2 rounded-lg hover:bg-error/10 text-text-muted hover:text-error transition-colors duration-200"
+                title="删除出图对象"
+              >
+                <Trash2 size={18} />
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 rounded-lg hover:bg-elevated text-text-secondary transition-colors duration-200"
+            >
+              <X size={18} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-5">
@@ -181,5 +193,4 @@ export default function EntityDrawer({ entity, open, onClose }: EntityDrawerProp
     </>
   )
 }
-
 

@@ -25,8 +25,8 @@ def get_prompt_description(name: str) -> str:
     descriptions = {
         "world_bible_analyze": "世界观分析 - 从小说文本中提取世界观框架",
         "visual_anchoring": "视觉锚定 - 生成视觉风格和色彩体系",
-        "entity_extraction": "实体提取 - 从章节中提取角色、场景、物品",
-        "character_attribute": "角色属性 - 提取角色的完整视觉属性",
+        "entity_extraction": "出图对象识别 - 从当前场景中提取角色、场景、物品",
+        "character_attribute": "角色精修 - 持续补充角色视觉属性和阶段变化",
         "scene_attribute": "场景属性 - 提取场景的完整视觉属性",
         "item_attribute": "物品属性 - 提取物品的完整视觉属性",
         "character_prompt": "角色图像提示词生成",

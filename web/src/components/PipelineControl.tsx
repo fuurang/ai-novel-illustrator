@@ -75,7 +75,7 @@ const nextContiguousSceneStart = (groups: any[]) => {
 }
 
 interface PipelineControlProps {
-  onOpenAiWorkspace?: (options?: { task?: string; extractionLevel?: string; sceneGranularity?: string }) => void
+  onOpenAiWorkspace?: (options?: { task?: string; extractionLevel?: string; sceneGranularity?: string; sceneId?: string }) => void
 }
 
 export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlProps) {
@@ -171,7 +171,7 @@ export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlPr
       setStageMessage('这一步需要先到 AI 工作台查看发送给 API 的指令，确认或手动修改后再执行。')
       onOpenAiWorkspace?.(
         stageKey === 'extract'
-          ? { task: 'entity_extraction', extractionLevel }
+          ? { task: 'entity_extraction', extractionLevel, sceneId: selectedGroup || undefined }
           : undefined
       )
       return

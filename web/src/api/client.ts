@@ -131,6 +131,11 @@ export const api = {
       const res = await request<{ attachments: any[] }>(`/projects/${projectId}/ai/attachments`)
       return res.attachments || []
     },
+    attachmentContent: (projectId: string, ref: string) =>
+      request<any>(`/projects/${projectId}/ai/attachment-content`, {
+        method: 'POST',
+        body: JSON.stringify({ ref }),
+      }),
     runs: async (projectId: string, limit = 30) => {
       const res = await request<{ runs: any[] }>(`/projects/${projectId}/ai/runs?limit=${limit}`)
       return res.runs || []
@@ -164,6 +169,15 @@ export const api = {
       request<any>(`/projects/${projectId}/entities/${entityId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
+      }),
+    delete: (projectId: string, entityId: string) =>
+      request<any>(`/projects/${projectId}/entities/${entityId}`, {
+        method: 'DELETE',
+      }),
+    bulkDelete: (projectId: string, entityIds: string[]) =>
+      request<any>(`/projects/${projectId}/entities/bulk-delete`, {
+        method: 'POST',
+        body: JSON.stringify({ entity_ids: entityIds }),
       }),
     updateAppearance: (projectId: string, entityId: string, data: any) =>
       request<any>(`/projects/${projectId}/entities/${entityId}/appearance`, {

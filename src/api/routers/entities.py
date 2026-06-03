@@ -79,10 +79,45 @@ class EntityUpdateRequest(BaseModel):
     aliases: Optional[list[str]] = None
 
 
+class EntityBulkDeleteRequest(BaseModel):
+    entity_ids: list[str]
+
+
 class AppearanceUpdateRequest(BaseModel):
     chapter: int
     appearance_note: Optional[str] = None
     clothing_override: Optional[str] = None
+
+
+def _delete_entities_from_store(project_id: str, entity_ids: list[str]) -> dict:
+    ids = {entity_id for entity_id in entity_ids if entity_id}
+    if not ids:
+        return {
+            "deleted_entity_ids": [],
+            "deleted_prompt_count": 0,
+            "missing_entity_ids": [],
+        }
+
+    entities = store.load_entities(project_id)
+    existing_ids = {entity.get("id") for entity in entities}
+    deleted_ids = [entity.get("id") for entity in entities if entity.get("id") in ids]
+    missing_ids = sorted(ids - existing_ids)
+
+    remaining_entities = [entity for entity in entities if entity.get("id") not in ids]
+    store.save_entities(project_id, remaining_entities)
+
+    prompts = store.load_prompts(project_id)
+    remaining_prompts = [prompt for prompt in prompts if prompt.get("entity_id") not in ids]
+    deleted_prompt_count = len(prompts) - len(remaining_prompts)
+    if deleted_prompt_count:
+        store.save_prompts(project_id, remaining_prompts)
+        store.save_prompts_md(project_id, remaining_prompts, "prompts.md")
+
+    return {
+        "deleted_entity_ids": deleted_ids,
+        "deleted_prompt_count": deleted_prompt_count,
+        "missing_entity_ids": missing_ids,
+    }
 
 
 @router.get("/{project_id}/entities")
@@ -173,6 +208,36 @@ async def update_entity(project_id: str, entity_id: str, request: EntityUpdateRe
     store.save_entities(project_id, entities)
 
     return {"message": "实体更新成功", "entity": entity}
+
+
+@router.delete("/{project_id}/entities/{entity_id}")
+async def delete_entity(project_id: str, entity_id: str):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    result = _delete_entities_from_store(project_id, [entity_id])
+    if not result["deleted_entity_ids"]:
+        raise HTTPException(status_code=404, detail=f"实体不存在: {entity_id}")
+
+    return {
+        "message": "出图对象已删除",
+        "entity_id": entity_id,
+        "deleted_prompt_count": result["deleted_prompt_count"],
+    }
+
+
+@router.post("/{project_id}/entities/bulk-delete")
+async def bulk_delete_entities(project_id: str, request: EntityBulkDeleteRequest):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    result = _delete_entities_from_store(project_id, request.entity_ids)
+    deleted_count = len(result["deleted_entity_ids"])
+    return {
+        "message": f"已删除 {deleted_count} 个出图对象",
+        "deleted_count": deleted_count,
+        **result,
+    }
 
 
 @router.put("/{project_id}/entities/{entity_id}/appearance")

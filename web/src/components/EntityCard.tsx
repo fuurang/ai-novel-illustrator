@@ -6,6 +6,7 @@ import {
   Lock,
   MapPin,
   RefreshCw,
+  Trash2,
   Unlock,
   User,
 } from 'lucide-react'
@@ -30,10 +31,13 @@ interface EntityCardProps {
     negative_prompt?: string
     attributes?: Record<string, any>
   }
+  selected?: boolean
+  onSelectChange?: (selected: boolean) => void
   onClick?: () => void
   onGenerate?: () => void
   onToggleLock?: (locked: boolean) => void
   onInspect?: () => void
+  onDelete?: () => void
   viewMode?: EntityViewMode
 }
 
@@ -52,10 +56,13 @@ const statusColors: Record<string, string> = {
 
 export default function EntityCard({
   entity,
+  selected = false,
+  onSelectChange,
   onClick,
   onGenerate,
   onToggleLock,
   onInspect,
+  onDelete,
   viewMode = 'large',
 }: EntityCardProps) {
   const config = typeConfig[entity.type]
@@ -111,6 +118,26 @@ export default function EntityCard({
     onToggleLock?.(!isLocked)
   }
 
+  const SelectionCheck = ({ compact = false }: { compact?: boolean }) =>
+    onSelectChange ? (
+      <label
+        className={cn(
+          'inline-flex items-center justify-center rounded-md border border-border bg-surface/95 text-text-muted hover:text-text-primary cursor-pointer transition-colors',
+          selected && 'border-accent bg-accent/15 text-accent',
+          compact ? 'h-7 w-7' : 'h-8 w-8'
+        )}
+        onClick={stopClick}
+        title={selected ? '取消选择' : '选择出图对象'}
+      >
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={(event) => onSelectChange(event.target.checked)}
+          className="h-3.5 w-3.5 accent-orange-500"
+        />
+      </label>
+    ) : null
+
   const PromptPreview = ({ compact = false }: { compact?: boolean }) => (
     <div className={cn('relative w-full', compact ? 'mt-1' : 'mt-2')} onClick={stopClick}>
       {!compact && (
@@ -140,7 +167,6 @@ export default function EntityCard({
       )}
       {drawingPrompt && (
         <div className="pointer-events-none absolute left-0 top-full z-50 mt-2 hidden w-[min(620px,80vw)] rounded-lg border border-border bg-surface p-3 text-xs text-text-secondary shadow-2xl peer-hover:block">
-          <div className="mb-2 text-sm font-medium text-text-primary">完整绘图指令</div>
           <div className="max-h-72 overflow-y-auto whitespace-pre-wrap leading-relaxed">
             {drawingPrompt}
           </div>
@@ -216,6 +242,22 @@ export default function EntityCard({
           <Info size={compact ? 13 : 14} />
         </button>
       )}
+      {onDelete && (
+        <button
+          type="button"
+          title="删除出图对象"
+          onClick={(event) => {
+            event.stopPropagation()
+            onDelete()
+          }}
+          className={cn(
+            'inline-flex items-center justify-center rounded-md text-text-muted hover:text-error hover:bg-error/10 transition-colors',
+            compact ? 'h-7 w-7' : 'h-8 w-8'
+          )}
+        >
+          <Trash2 size={compact ? 13 : 14} />
+        </button>
+      )}
     </div>
   )
 
@@ -226,8 +268,12 @@ export default function EntityCard({
         onKeyDown={handleKeyDown}
         role="button"
         tabIndex={0}
-        className="grid grid-cols-[minmax(180px,1.1fr)_88px_88px_minmax(220px,1.5fr)_112px_172px] items-center gap-3 border-b border-border px-3 py-2 text-sm cursor-pointer hover:bg-elevated focus:outline-none focus:ring-2 focus:ring-accent/30"
+        className={cn(
+          'grid grid-cols-[32px_minmax(180px,1.1fr)_88px_88px_minmax(220px,1.5fr)_112px_172px] items-center gap-3 border-b border-border px-3 py-2 text-sm cursor-pointer hover:bg-elevated focus:outline-none focus:ring-2 focus:ring-accent/30',
+          selected && 'bg-accent/5'
+        )}
       >
+        <SelectionCheck compact />
         <div className="flex items-center gap-2 min-w-0">
           <div className="relative w-8 h-8 rounded-md bg-elevated border border-border shrink-0 flex items-center justify-center overflow-hidden">
             {entity.image_url ? (
@@ -269,8 +315,14 @@ export default function EntityCard({
         onKeyDown={handleKeyDown}
         role="button"
         tabIndex={0}
-        className="relative h-[128px] bg-surface border border-border rounded-lg p-2 cursor-pointer transition-all duration-200 hover:border-border-hover hover:bg-elevated group focus:outline-none focus:ring-2 focus:ring-accent/40"
+        className={cn(
+          'relative h-[128px] bg-surface border border-border rounded-lg p-2 cursor-pointer transition-all duration-200 hover:border-border-hover hover:bg-elevated group focus:outline-none focus:ring-2 focus:ring-accent/40',
+          selected && 'border-accent bg-accent/5'
+        )}
       >
+        <div className="absolute right-2 top-2 z-20">
+          <SelectionCheck compact />
+        </div>
         <div className="flex items-start gap-2">
           <div className="relative w-10 h-10 rounded-md bg-elevated border border-border overflow-hidden shrink-0 flex items-center justify-center">
             {entity.image_url ? (
@@ -284,7 +336,7 @@ export default function EntityCard({
               </div>
             )}
           </div>
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0 flex-1 pr-8">
             <div className="flex items-center gap-1.5 min-w-0">
               <div className="text-sm font-medium text-text-primary truncate">{displayName}</div>
               {isLocked && <Lock size={12} className="shrink-0 text-success" />}
@@ -315,8 +367,14 @@ export default function EntityCard({
       onKeyDown={handleKeyDown}
       role="button"
       tabIndex={0}
-      className="relative h-[380px] bg-surface border border-border rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:border-border-hover hover:bg-elevated group focus:outline-none focus:ring-2 focus:ring-accent/40"
+      className={cn(
+        'relative h-[380px] bg-surface border border-border rounded-lg overflow-hidden cursor-pointer transition-all duration-200 hover:border-border-hover hover:bg-elevated group focus:outline-none focus:ring-2 focus:ring-accent/40',
+        selected && 'border-accent bg-accent/5'
+      )}
     >
+      <div className="absolute right-3 top-3 z-20">
+        <SelectionCheck />
+      </div>
       <div className="h-full flex flex-col">
         <div className="relative h-[180px] bg-elevated border-b border-border overflow-hidden flex items-center justify-center shrink-0">
           {entity.image_url ? (
@@ -340,7 +398,7 @@ export default function EntityCard({
             </span>
             {chapterLabel && <span className="text-[11px] text-text-secondary bg-surface/90 px-2 py-0.5 rounded-full">{chapterLabel}</span>}
           </div>
-          <div className="absolute right-3 top-3 flex items-center gap-1.5">
+          <div className="absolute right-14 top-3 flex items-center gap-1.5">
             {isLocked && (
               <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] text-success">
                 <Lock size={11} />

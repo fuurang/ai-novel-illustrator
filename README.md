@@ -84,6 +84,73 @@ npm run dev
 
 打开浏览器访问 http://localhost:8888
 
+## Docker 部署
+
+仓库已提供 `Dockerfile`、`web/Dockerfile`、`web/nginx.conf` 和 `docker-compose.yml`。Compose 会启动两个容器：
+
+- `backend`：FastAPI，监听容器内 `8000`
+- `frontend`：Nginx 托管前端静态文件，并把 `/api`、`/output`、`/legacy-output` 反向代理到后端
+
+### 1. 准备配置
+
+首次部署前创建用户配置文件：
+
+```bash
+cp config/default.yaml config/user.yaml
+```
+
+编辑 `config/user.yaml`，至少填入 LLM 和生图后端配置。`config/user.yaml` 不会提交到 Git，适合放 API Key。
+
+### 2. 启动服务
+
+```bash
+docker compose up -d --build
+```
+
+启动后访问：
+
+```text
+http://localhost:8888
+```
+
+后端健康检查：
+
+```bash
+curl http://localhost:8888/api/health
+```
+
+### 3. 持久化目录
+
+`docker-compose.yml` 默认挂载这些本地路径：
+
+- `./projects:/app/projects`：项目数据、章节、实体、图片
+- `./output:/app/output`：旧版输出目录兼容
+- `./config/user.yaml:/app/config/user.yaml`：用户配置和密钥
+
+迁移服务器时，保留 `projects/`、`output/` 和 `config/user.yaml` 即可恢复数据与配置。
+
+### 4. 更新部署
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+查看日志：
+
+```bash
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+停止服务：
+
+```bash
+docker compose down
+```
+
+如果部署在服务器并通过域名访问，建议在外层再接入 Caddy、Nginx Proxy Manager 或其他 HTTPS 反向代理，将域名转发到宿主机的 `8888` 端口。
+
 ### CLI 使用
 
 ```bash
