@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   BookOpen,
@@ -53,6 +53,71 @@ const entityViewModes: { key: EntityViewMode; label: string; icon: typeof Grid2X
   { key: 'details', label: '详细信息', icon: List },
 ]
 
+const parseChapterRange = (value: string) => {
+  const chapters: number[] = []
+  String(value || '').split(',').forEach((part) => {
+    const trimmed = part.trim()
+    if (!trimmed) return
+    const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/)
+    if (range) {
+      const start = Number(range[1])
+      const end = Number(range[2])
+      for (let chapter = start; chapter <= end; chapter += 1) chapters.push(chapter)
+      return
+    }
+    const single = Number(trimmed)
+    if (Number.isFinite(single)) chapters.push(single)
+  })
+  return chapters
+}
+
+const entityChapterNumbers = (entity: any) => {
+  const chapters = new Set<number>()
+  const add = (value: any) => {
+    const num = Number(value)
+    if (Number.isFinite(num) && num > 0) chapters.add(num)
+  }
+
+  ;(entity.source_quotes || []).forEach((item: any) => {
+    add(typeof item === 'number' ? item : item?.chapter)
+  })
+  ;(entity.chapter_appearances || []).forEach((item: any) => {
+    add(typeof item === 'number' ? item : item?.chapter)
+  })
+  ;(entity.source_chapters || []).forEach(add)
+  add(entity.first_appearance_chapter)
+  parseChapterRange(entity.chapter_range || '').forEach(add)
+
+  return chapters
+}
+
+const entityInScene = (entity: any, scene: any) => {
+  const sceneChapters = new Set(
+    (scene?.chapters || [])
+      .map((chapter: any) => Number(chapter))
+      .filter((chapter: number) => Number.isFinite(chapter))
+  )
+  if (!sceneChapters.size) {
+    parseChapterRange(scene?.chapter_range || '').forEach((chapter) => sceneChapters.add(chapter))
+  }
+  if (!sceneChapters.size) return true
+  const chapters = entityChapterNumbers(entity)
+  if (!chapters.size) return false
+  return [...chapters].some((chapter) => sceneChapters.has(chapter))
+}
+
+const savedGalleryImagesFromEntities = (entities: any[]) =>
+  entities
+    .filter((entity) => entity.image_locked && (entity.locked_image_url || entity.image_url))
+    .map((entity) => ({
+      id: entity.id,
+      url: entity.locked_image_url || entity.image_url,
+      path: entity.locked_image_url || entity.image_url,
+      name: entity.name || '已保存图片',
+      entity_name: entity.name,
+      entity_id: entity.id,
+    }))
+
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()
   const { selectProject, currentProject } = useProjectStore()
@@ -74,6 +139,7 @@ export default function ProjectDetail() {
   const [chapterDetail, setChapterDetail] = useState<any>(null)
   const [chapterLoading, setChapterLoading] = useState(false)
   const [sceneGroups, setSceneGroups] = useState<any[]>([])
+  const [selectedSceneFromPipeline, setSelectedSceneFromPipeline] = useState<any | null>(null)
   const [aiLaunch, setAiLaunch] = useState<{ task: string; instruction: string; extractionLevel?: string; sceneGranularity?: string; sceneId?: string } | null>(null)
   const [guideCollapsed, setGuideCollapsed] = useState(false)
   const [chapterListCollapsed, setChapterListCollapsed] = useState(false)
@@ -135,6 +201,22 @@ export default function ProjectDetail() {
     } catch {}
   }
 
+  const selectedScene = useMemo(
+    () => selectedSceneFromPipeline
+      ? sceneGroups.find((group) => String(group.id) === String(selectedSceneFromPipeline.id)) || selectedSceneFromPipeline
+      : null,
+    [sceneGroups, selectedSceneFromPipeline]
+  )
+
+  const visibleEntities = useMemo(
+    () => entities.filter((entity) => {
+      if (entityType !== 'all' && entity.type !== entityType) return false
+      if (selectedScene && !entityInScene(entity, selectedScene)) return false
+      return true
+    }),
+    [entities, entityType, selectedScene]
+  )
+
   useEffect(() => {
     if (!id) return
     setDataLoading(true)
@@ -143,12 +225,12 @@ export default function ProjectDetail() {
         if (activeTab === 'world') {
           await loadWorldBible()
         } else if (activeTab === 'entities') {
-          const type = entityType === 'all' ? undefined : entityType
-          const data = await api.entities.list(id, type)
+          const data = await api.entities.list(id)
           setEntities(data)
         } else if (activeTab === 'gallery') {
-          const data = await api.images.list(id)
-          setImages(data)
+          const data = await api.entities.list(id)
+          setEntities(data)
+          setImages(savedGalleryImagesFromEntities(data))
         }
       } catch {
       } finally {
@@ -161,11 +243,11 @@ export default function ProjectDetail() {
   useEffect(() => {
     setSelectedEntityIds((current) => {
       if (!current.size) return current
-      const visibleIds = new Set(entities.map((entity) => entity.id))
+      const visibleIds = new Set(visibleEntities.map((entity) => entity.id))
       const next = new Set([...current].filter((entityId) => visibleIds.has(entityId)))
       return next.size === current.size ? current : next
     })
-  }, [entities])
+  }, [visibleEntities])
 
   const withImageVersion = (entity: any, imageVersion?: number) => {
     if (!imageVersion || !entity?.image_url) return entity
@@ -183,7 +265,11 @@ export default function ProjectDetail() {
   const refreshEntity = async (entityId: string, imageVersion?: number) => {
     if (!id) return null
     const detail = withImageVersion(await api.entities.get(id, entityId), imageVersion)
-    setEntities((current) => current.map((entity) => (entity.id === entityId ? detail : entity)))
+    setEntities((current) => {
+      const nextEntities = current.map((entity) => (entity.id === entityId ? detail : entity))
+      if (activeTab === 'gallery') setImages(savedGalleryImagesFromEntities(nextEntities))
+      return nextEntities
+    })
     setSelectedEntity((current: any) => (current?.id === entityId ? detail : current))
     setPreviewImage((current) =>
       current?.entity?.id === entityId && detail.image_url
@@ -195,15 +281,14 @@ export default function ProjectDetail() {
 
   const refreshEntities = async (imageVersion?: number, refreshedEntityIds?: Set<string>) => {
     if (!id) return
-    const type = entityType === 'all' ? undefined : entityType
-    const data = await api.entities.list(id, type)
-    setEntities(
-      data.map((entity: any) =>
+    const data = await api.entities.list(id)
+    const nextEntities = data.map((entity: any) =>
         !refreshedEntityIds || refreshedEntityIds.has(entity.id)
           ? withImageVersion(entity, imageVersion)
           : entity
-      )
     )
+    setEntities(nextEntities)
+    if (activeTab === 'gallery') setImages(savedGalleryImagesFromEntities(nextEntities))
   }
 
   const handleEntityInspect = async (entity: any) => {
@@ -247,8 +332,7 @@ export default function ProjectDetail() {
       await api.images.generateSingle(id, entity.id)
       await refreshEntity(entity.id, Date.now())
       if (activeTab === 'gallery') {
-        const data = await api.images.list(id)
-        setImages(data)
+        await refreshEntities()
       }
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '图片生成失败')
@@ -268,7 +352,7 @@ export default function ProjectDetail() {
 
   const handleGenerateUnlocked = async () => {
     if (!id || generatingEntityIds.size > 0) return
-    const targetIds = entities
+    const targetIds = visibleEntities
       .filter((entity) => !entity.image_locked)
       .map((entity) => entity.id)
 
@@ -288,8 +372,7 @@ export default function ProjectDetail() {
       await api.images.generate(id, { entity_ids: targetIds, skip_locked: true })
       await refreshEntities(Date.now(), new Set(targetIds))
       if (activeTab === 'gallery') {
-        const data = await api.images.list(id)
-        setImages(data)
+        await refreshEntities()
       }
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '图片生成失败')
@@ -310,6 +393,7 @@ export default function ProjectDetail() {
     try {
       await api.images.lock(id, entity.id, locked)
       const detail = await refreshEntity(entity.id)
+      await refreshEntities()
       if (detail?.image_url && previewImage?.entity?.id === entity.id) {
         setPreviewImage({ url: detail.image_url, name: detail.name || entity.name, entity: detail })
       }
@@ -321,6 +405,20 @@ export default function ProjectDetail() {
         next.delete(entity.id)
         return next
       })
+    }
+  }
+
+  const handleGalleryImageDelete = async (image: any) => {
+    if (!id) return
+    const imageRef = image.path || image.url
+    if (!imageRef) return
+
+    try {
+      await api.images.delete(id, imageRef)
+      await refreshEntities()
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '图片删除失败')
+      throw error
     }
   }
 
@@ -346,8 +444,7 @@ export default function ProjectDetail() {
       if (selectedEntity?.id === entity.id) setDrawerOpen(false)
       setPreviewImage((current) => (current?.entity?.id === entity.id ? null : current))
       if (activeTab === 'gallery') {
-        const data = await api.images.list(id)
-        setImages(data)
+        await refreshEntities()
       }
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '删除出图对象失败')
@@ -369,7 +466,7 @@ export default function ProjectDetail() {
   const setAllVisibleEntitySelection = (checked: boolean) => {
     setSelectedEntityIds((current) => {
       const next = new Set(current)
-      entities.forEach((entity) => {
+      visibleEntities.forEach((entity) => {
         if (checked) {
           next.add(entity.id)
         } else {
@@ -389,7 +486,7 @@ export default function ProjectDetail() {
       return
     }
 
-    const selectedNames = entities
+    const selectedNames = visibleEntities
       .filter((entity) => selectedEntityIds.has(entity.id))
       .slice(0, 5)
       .map((entity) => entity.name || '未命名出图对象')
@@ -410,10 +507,7 @@ export default function ProjectDetail() {
       setSelectedEntity((current: any) => (current && deletedIds.has(current.id) ? null : current))
       if (selectedEntity && deletedIds.has(selectedEntity.id)) setDrawerOpen(false)
       setPreviewImage((current) => (current?.entity?.id && deletedIds.has(current.entity.id) ? null : current))
-      if (activeTab === 'gallery') {
-        const data = await api.images.list(id)
-        setImages(data)
-      }
+      if (activeTab === 'gallery') await refreshEntities()
     } catch (error) {
       window.alert(error instanceof Error ? error.message : '批量删除出图对象失败')
     }
@@ -428,12 +522,22 @@ export default function ProjectDetail() {
     setActiveTab('ai')
   }
 
-  const unlockedEntityCount = entities.filter((entity) => !entity.image_locked).length
-  const lockedEntityCount = entities.length - unlockedEntityCount
+  const handleAutoWorkflowComplete = async () => {
+    if (!id) return
+    const entityList = await api.entities.list(id)
+    const version = Date.now()
+    const nextEntities = entityList.map((entity: any) => withImageVersion(entity, version))
+    setEntities(nextEntities)
+    setImages(savedGalleryImagesFromEntities(nextEntities))
+    setActiveTab('entities')
+  }
+
+  const unlockedEntityCount = visibleEntities.filter((entity) => !entity.image_locked).length
+  const lockedEntityCount = visibleEntities.length - unlockedEntityCount
   const isBatchGenerating = generatingEntityIds.size > 0
   const selectedEntityCount = selectedEntityIds.size
-  const allVisibleEntitiesSelected = entities.length > 0 && entities.every((entity) => selectedEntityIds.has(entity.id))
-  const previewableEntities = entities.filter((entity) => entity.image_url)
+  const allVisibleEntitiesSelected = visibleEntities.length > 0 && visibleEntities.every((entity) => selectedEntityIds.has(entity.id))
+  const previewableEntities = visibleEntities.filter((entity) => entity.image_url)
   const previewIndex = previewImage
     ? previewableEntities.findIndex((entity) => entity.id === previewImage.entity?.id)
     : -1
@@ -477,6 +581,8 @@ export default function ProjectDetail() {
       {/* 顶部：流水线控制 */}
       <div className="shrink-0 bg-surface border-b border-border">
         <PipelineControl
+          onAutoWorkflowComplete={handleAutoWorkflowComplete}
+          onSelectedSceneChange={setSelectedSceneFromPipeline}
           onOpenAiWorkspace={(options) => {
             if (options?.task) {
               setAiLaunch({
@@ -627,7 +733,7 @@ export default function ProjectDetail() {
             </div>
           )}
 
-          {activeTab === 'ai' && (
+          <div className={cn('h-full', activeTab === 'ai' ? 'block' : 'hidden')}>
             <AiWorkspace
               projectId={id || ''}
               selectedChapter={selectedChapter}
@@ -638,7 +744,7 @@ export default function ProjectDetail() {
               initialSceneId={aiLaunch?.sceneId}
               onInitialHandled={() => setAiLaunch(null)}
             />
-          )}
+          </div>
 
           {activeTab === 'content' && (
             chapterLoading ? (
@@ -783,11 +889,13 @@ export default function ProjectDetail() {
                       </div>
                     ))}
                   </div>
-                ) : entities.length === 0 ? (
+                ) : visibleEntities.length === 0 ? (
                   <div className="flex flex-col items-center justify-center h-full text-text-muted">
                     <Users size={48} className="mb-4 opacity-30" />
                     <p className="text-sm">暂无出图对象</p>
-                    <p className="text-xs mt-1">请先到 AI 工作台识别角色、场景和物品。</p>
+                    <p className="text-xs mt-1">
+                      {selectedScene ? '当前场景下暂无匹配对象。' : '请先到 AI 工作台识别角色、场景和物品。'}
+                    </p>
                   </div>
                 ) : (
                   entityViewMode === 'details' ? (
@@ -801,7 +909,7 @@ export default function ProjectDetail() {
                         <div>状态</div>
                         <div>操作</div>
                       </div>
-                      {entities.map((entity) => (
+                      {visibleEntities.map((entity) => (
                         <EntityCard
                           key={entity.id}
                           viewMode={entityViewMode}
@@ -830,7 +938,7 @@ export default function ProjectDetail() {
                           : 'grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5'
                       )}
                     >
-                      {entities.map((entity) => (
+                      {visibleEntities.map((entity) => (
                         <EntityCard
                           key={entity.id}
                           viewMode={entityViewMode}
@@ -857,7 +965,7 @@ export default function ProjectDetail() {
 
             {activeTab === 'gallery' && (
               <div className="p-6 h-full">
-                <Gallery images={images} loading={dataLoading} />
+                <Gallery images={images} loading={dataLoading} onDelete={handleGalleryImageDelete} />
               </div>
             )}
           </div>

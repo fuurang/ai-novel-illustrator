@@ -1,24 +1,48 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronRight, X, ZoomIn } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Trash2, X, ZoomIn } from 'lucide-react'
 
 interface GalleryProps {
   images: {
     id: string
     url: string
+    path?: string
     name?: string
     entity_name?: string
   }[]
   loading?: boolean
+  onDelete?: (image: GalleryProps['images'][number]) => Promise<void> | void
 }
 
-export default function Gallery({ images, loading }: GalleryProps) {
+export default function Gallery({ images, loading, onDelete }: GalleryProps) {
   const [previewIndex, setPreviewIndex] = useState<number | null>(null)
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null)
   const preview = previewIndex !== null ? images[previewIndex] : null
   const canSwitchPreview = images.length > 1 && previewIndex !== null
 
   const switchPreview = (direction: -1 | 1) => {
     if (previewIndex === null || images.length === 0) return
     setPreviewIndex((previewIndex + direction + images.length) % images.length)
+  }
+
+  const handleDelete = async (image: GalleryProps['images'][number]) => {
+    if (!onDelete || deletingImageId) return
+    const label = image.name || image.entity_name || '这张图片'
+    if (!window.confirm(`确定删除「${label}」吗？删除后文件会从项目目录移除。`)) return
+
+    setDeletingImageId(image.id)
+    try {
+      await onDelete(image)
+      setPreviewIndex((current) => {
+        if (current === null) return null
+        const deletedIndex = images.findIndex((item) => item.id === image.id)
+        if (images.length <= 1) return null
+        if (current > deletedIndex) return current - 1
+        if (current === deletedIndex) return Math.min(current, images.length - 2)
+        return current
+      })
+    } finally {
+      setDeletingImageId(null)
+    }
   }
 
   useEffect(() => {
@@ -55,7 +79,7 @@ export default function Gallery({ images, loading }: GalleryProps) {
       <div className="flex flex-col items-center justify-center py-20 text-text-muted">
         <ZoomIn size={48} className="mb-4 opacity-30" />
         <p className="text-sm">暂无图片</p>
-        <p className="text-xs mt-1">运行生图流水线后将在此展示</p>
+        <p className="text-xs mt-1">保存出图对象中的图片后，将在此展示。</p>
       </div>
     )
   }
@@ -78,6 +102,20 @@ export default function Gallery({ images, loading }: GalleryProps) {
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-200 flex items-center justify-center">
                 <ZoomIn size={24} className="text-white opacity-0 group-hover:opacity-100 transition-opacity duration-200" />
               </div>
+              {onDelete && (
+                <button
+                  type="button"
+                  title="删除图片"
+                  disabled={deletingImageId === img.id}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void handleDelete(img)
+                  }}
+                  className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-black/55 text-white opacity-0 transition-opacity duration-200 hover:bg-error group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Trash2 size={15} />
+                </button>
+              )}
             </div>
             {(img.name || img.entity_name) && (
               <div className="p-2.5">
@@ -96,11 +134,26 @@ export default function Gallery({ images, loading }: GalleryProps) {
           onClick={() => setPreviewIndex(null)}
         >
           <button
+            type="button"
             onClick={() => setPreviewIndex(null)}
             className="absolute top-4 right-4 p-2 rounded-lg bg-surface/80 text-text-primary hover:bg-elevated transition-colors duration-200"
           >
             <X size={20} />
           </button>
+          {onDelete && (
+            <button
+              type="button"
+              disabled={deletingImageId === preview.id}
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleDelete(preview)
+              }}
+              className="absolute right-16 top-4 inline-flex items-center gap-1.5 rounded-lg bg-surface/80 px-3 py-2 text-sm text-text-primary transition-colors duration-200 hover:bg-error hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Trash2 size={16} />
+              删除
+            </button>
+          )}
           {canSwitchPreview && (
             <button
               type="button"

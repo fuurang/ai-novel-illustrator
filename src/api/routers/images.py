@@ -2,6 +2,7 @@ import asyncio
 import shutil
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ from src.models.world_bible import WorldBible
 from src.render.chatgpt2api_backend import ChatGPT2APIBackend
 from src.api.routers.settings import load_config
 from src.api.image_paths import (
+    LEGACY_IMAGE_OUTPUT_ROOT,
     candidate_image_paths,
     get_project_images_dir,
     get_project_output_dir,
@@ -38,6 +40,10 @@ class LockImageRequest(BaseModel):
     locked: bool = True
 
 
+class DeleteImageRequest(BaseModel):
+    path: str
+
+
 def _build_image_generator(config: dict) -> ImageGenerator:
     image_config = config.get("image", {})
     chatgpt2api_config = image_config.get("chatgpt2api", {})
@@ -48,6 +54,69 @@ def _build_image_generator(config: dict) -> ImageGenerator:
     }
     backend = ChatGPT2APIBackend(backend_config)
     return ImageGenerator(backend, config)
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_project_image_path(project_id: str, image_ref: str) -> Optional[Path]:
+    if not image_ref:
+        return None
+
+    parsed_path = urlparse(image_ref).path if "://" in image_ref else image_ref
+    parsed_path = unquote(parsed_path)
+    project_root = get_project_output_dir(project_id).resolve()
+    legacy_root = (LEGACY_IMAGE_OUTPUT_ROOT / project_id).resolve()
+    output_prefix = f"/output/{project_id}/"
+    legacy_prefix = f"/legacy-output/{project_id}/"
+
+    if parsed_path.startswith(output_prefix):
+        image_path = (project_root / parsed_path[len(output_prefix):]).resolve()
+    elif parsed_path.startswith(legacy_prefix):
+        image_path = (legacy_root / parsed_path[len(legacy_prefix):]).resolve()
+    else:
+        raw_path = Path(parsed_path)
+        if raw_path.is_absolute():
+            image_path = raw_path.resolve()
+        else:
+            image_path = (project_root / parsed_path.lstrip("/\\")).resolve()
+
+    if _is_relative_to(image_path, project_root) or _is_relative_to(image_path, legacy_root):
+        return image_path
+    return None
+
+
+def _stored_image_path_candidates(project_id: str, value: str) -> list[Path]:
+    if not value:
+        return []
+
+    candidates: list[Path] = []
+    resolved = _resolve_project_image_path(project_id, value)
+    if resolved:
+        candidates.append(resolved)
+
+    raw_path = Path(value)
+    if raw_path.is_absolute():
+        candidates.append(raw_path.resolve())
+    else:
+        candidates.extend(
+            [
+                raw_path.resolve(),
+                (store.get_project_dir(project_id) / value).resolve(),
+                (get_project_output_dir(project_id) / value).resolve(),
+            ]
+        )
+
+    unique_candidates = []
+    for path in candidates:
+        if path not in unique_candidates:
+            unique_candidates.append(path)
+    return unique_candidates
 
 
 def _entity_image_path(project_id: str, entity: dict) -> Optional[Path]:
@@ -73,6 +142,67 @@ def _entity_image_path(project_id: str, entity: dict) -> Optional[Path]:
         candidates.extend(candidate_image_paths(project_id, "scenes", f"{entity_id}.png"))
 
     return next((path for path in candidates if path.exists()), None)
+
+
+def _clear_deleted_image_references(project_id: str, deleted_path: Path) -> dict:
+    entities_data = store.load_entities(project_id)
+    deleted_path = deleted_path.resolve()
+    changed = False
+    unlocked_entities: list[str] = []
+    cleaned_chapter_refs = 0
+
+    for entity in entities_data:
+        locked_path = entity.get("locked_image_path", "")
+        if locked_path:
+            if any(path == deleted_path for path in _stored_image_path_candidates(project_id, locked_path)):
+                entity["image_locked"] = False
+                entity.pop("locked_image_path", None)
+                unlocked_entities.append(entity.get("id", ""))
+                changed = True
+
+        chapter_images = entity.get("chapter_images", {})
+        if isinstance(chapter_images, dict):
+            next_chapter_images = {}
+            for chapter, image_ref in chapter_images.items():
+                if isinstance(image_ref, str) and any(
+                    path == deleted_path for path in _stored_image_path_candidates(project_id, image_ref)
+                ):
+                    cleaned_chapter_refs += 1
+                    changed = True
+                    continue
+                next_chapter_images[chapter] = image_ref
+            if next_chapter_images != chapter_images:
+                entity["chapter_images"] = next_chapter_images
+
+    if changed:
+        store.save_entities(project_id, entities_data)
+
+    return {
+        "unlocked_entities": [entity_id for entity_id in unlocked_entities if entity_id],
+        "cleaned_chapter_refs": cleaned_chapter_refs,
+    }
+
+
+def _delete_project_image(project_id: str, image_ref: str) -> dict:
+    image_path = _resolve_project_image_path(project_id, image_ref)
+    if image_path is None:
+        return {"error": "图片路径无效，不能删除项目目录外的文件"}
+
+    if image_path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return {"error": "仅支持删除图片文件"}
+
+    if not image_path.exists() or not image_path.is_file():
+        return {"error": "图片文件不存在"}
+
+    deleted_url = image_url(project_id, image_path)
+    image_path.unlink()
+    cleanup = _clear_deleted_image_references(project_id, image_path)
+
+    return {
+        "message": "图片已删除",
+        "path": deleted_url,
+        **cleanup,
+    }
 
 
 def _lock_entity_image(project_id: str, entity_id: str, locked: bool) -> dict:
@@ -351,6 +481,22 @@ async def lock_entity_image(project_id: str, entity_id: str, request: LockImageR
         result = _lock_entity_image(project_id, entity_id, request.locked)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"图片保存状态更新失败: {str(e)}")
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    return result
+
+
+@router.delete("/{project_id}/images")
+async def delete_image(project_id: str, request: DeleteImageRequest):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    try:
+        result = _delete_project_image(project_id, request.path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图片删除失败: {str(e)}")
 
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])

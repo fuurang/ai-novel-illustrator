@@ -53,6 +53,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<'success' | 'error' | null>(null)
+  const [testMessage, setTestMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
 
   useEffect(() => {
@@ -89,11 +90,23 @@ export default function Settings() {
   const handleTest = async () => {
     setTesting(true)
     setTestResult(null)
+    setTestMessage('')
     try {
-      await api.settings.testConnection()
-      setTestResult('success')
-    } catch {
+      const result = await api.settings.testConnection({
+        api_key: settings.llm.api_key,
+        base_url: settings.llm.base_url,
+        model: settings.llm.model,
+      })
+      if (result?.success) {
+        setTestResult('success')
+        setTestMessage(result.message || '连接成功')
+      } else {
+        setTestResult('error')
+        setTestMessage(result?.detail || result?.message || '连接失败')
+      }
+    } catch (error) {
       setTestResult('error')
+      setTestMessage(error instanceof Error ? error.message : '连接失败')
     } finally {
       setTesting(false)
     }
@@ -262,22 +275,34 @@ export default function Settings() {
       </div>
 
       <div className="flex items-center justify-between pt-2">
-        <button
-          onClick={handleTest}
-          disabled={testing}
-          className="flex items-center gap-2 border border-border text-text-secondary rounded-lg px-4 py-2 text-sm hover:border-border-hover hover:text-text-primary transition-colors duration-200 disabled:opacity-50"
-        >
-          {testing ? (
-            <Loader2 size={16} className="animate-spin" />
-          ) : testResult === 'success' ? (
-            <Wifi size={16} className="text-success" />
-          ) : testResult === 'error' ? (
-            <WifiOff size={16} className="text-error" />
-          ) : (
-            <Wifi size={16} />
+        <div className="min-w-0">
+          <button
+            onClick={handleTest}
+            disabled={testing}
+            className="flex items-center gap-2 border border-border text-text-secondary rounded-lg px-4 py-2 text-sm hover:border-border-hover hover:text-text-primary transition-colors duration-200 disabled:opacity-50"
+          >
+            {testing ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : testResult === 'success' ? (
+              <Wifi size={16} className="text-success" />
+            ) : testResult === 'error' ? (
+              <WifiOff size={16} className="text-error" />
+            ) : (
+              <Wifi size={16} />
+            )}
+            {testing ? '测试中...' : testResult === 'success' ? '连接成功' : testResult === 'error' ? '连接失败' : '测试连接'}
+          </button>
+          {testMessage && (
+            <div
+              className={`mt-2 max-w-xl truncate text-xs ${
+                testResult === 'success' ? 'text-success' : 'text-error'
+              }`}
+              title={testMessage}
+            >
+              {testMessage}
+            </div>
           )}
-          {testing ? '测试中...' : testResult === 'success' ? '连接成功' : testResult === 'error' ? '连接失败' : '测试连接'}
-        </button>
+        </div>
         <button
           onClick={handleSave}
           disabled={saving}

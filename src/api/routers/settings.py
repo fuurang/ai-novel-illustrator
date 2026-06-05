@@ -2,6 +2,7 @@ import yaml
 import httpx
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urljoin
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -21,6 +22,32 @@ def _deep_merge(base: dict, override: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+def _is_masked_secret(value: Optional[str]) -> bool:
+    return isinstance(value, str) and "****" in value
+
+
+def _strip_masked_secrets(config: dict, existing: dict) -> dict:
+    result = {}
+    for key, value in config.items():
+        existing_value = existing.get(key) if isinstance(existing, dict) else None
+        if isinstance(value, dict):
+            nested = _strip_masked_secrets(value, existing_value if isinstance(existing_value, dict) else {})
+            if nested:
+                result[key] = nested
+        elif _is_masked_secret(value):
+            continue
+        else:
+            result[key] = value
+    return result
+
+
+def _chat_completions_url(base_url: str) -> str:
+    base_url = base_url.strip()
+    if base_url.rstrip("/").endswith("/chat/completions"):
+        return base_url
+    return urljoin(base_url.rstrip("/") + "/", "chat/completions")
 
 
 def load_config() -> dict:
@@ -97,6 +124,7 @@ async def update_settings(request: SettingsUpdate):
         with open(USER_CONFIG_PATH, "r", encoding="utf-8") as f:
             existing = yaml.safe_load(f) or {}
 
+    user_config = _strip_masked_secrets(user_config, existing)
     merged = _deep_merge(existing, user_config)
     save_config(merged)
 
@@ -110,9 +138,21 @@ async def test_connection(request: TestConnectionRequest):
     llm_config = config.get("llm", {})
 
     provider = request.provider or llm_config.get("provider", "deepseek")
-    api_key = request.api_key or llm_config.get("api_key", "")
-    base_url = request.base_url or llm_config.get("base_url", "")
-    model = request.model or llm_config.get("model", "deepseek-chat")
+    if request.api_key is None:
+        api_key = llm_config.get("api_key", "")
+    else:
+        request_api_key = request.api_key.strip()
+        api_key = llm_config.get("api_key", "") if _is_masked_secret(request_api_key) else request_api_key
+    base_url = (
+        request.base_url.strip()
+        if request.base_url is not None
+        else llm_config.get("base_url", "")
+    )
+    model = (
+        request.model.strip()
+        if request.model is not None
+        else llm_config.get("model", "deepseek-chat")
+    )
 
     if not api_key:
         raise HTTPException(status_code=400, detail="未提供API Key")
@@ -122,6 +162,7 @@ async def test_connection(request: TestConnectionRequest):
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
+            chat_url = _chat_completions_url(base_url)
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -132,15 +173,18 @@ async def test_connection(request: TestConnectionRequest):
                 "max_tokens": 5,
             }
             response = await client.post(
-                f"{base_url}/chat/completions",
+                chat_url,
                 json=payload,
                 headers=headers,
             )
             response.raise_for_status()
-            return {"success": True, "message": "连接成功", "model": model}
+            return {"success": True, "message": "连接成功", "model": model, "provider": provider}
     except httpx.HTTPStatusError as e:
-        return {"success": False, "message": f"HTTP错误: {e.response.status_code}", "detail": str(e)}
+        detail = e.response.text[:500] if e.response is not None else str(e)
+        return {"success": False, "message": f"HTTP错误: {e.response.status_code}", "detail": detail}
     except httpx.ConnectError:
         return {"success": False, "message": f"无法连接到 {base_url}"}
+    except httpx.TimeoutException:
+        return {"success": False, "message": "连接超时，请检查 API 地址或网络"}
     except Exception as e:
         return {"success": False, "message": f"连接失败: {str(e)}"}

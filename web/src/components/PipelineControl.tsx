@@ -1,7 +1,7 @@
-import { Play, Loader2, Circle, MapPin, RefreshCw, ChevronDown, ChevronUp, Check, X } from 'lucide-react'
+import { Play, Loader2, Circle, MapPin, RefreshCw, ChevronDown, ChevronUp, Check, X, Wand2 } from 'lucide-react'
 import { usePipelineStore } from '@/stores/pipelineStore'
 import { useProjectStore } from '@/stores/projectStore'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { api } from '@/api/client'
 
 const stages = [
@@ -76,9 +76,132 @@ const nextContiguousSceneStart = (groups: any[]) => {
 
 interface PipelineControlProps {
   onOpenAiWorkspace?: (options?: { task?: string; extractionLevel?: string; sceneGranularity?: string; sceneId?: string }) => void
+  onAutoWorkflowComplete?: () => Promise<void> | void
+  onSelectedSceneChange?: (scene: any | null) => void
 }
 
-export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlProps) {
+const parseChapterRange = (value: string) => {
+  const chapters: number[] = []
+  String(value || '').split(',').forEach((part) => {
+    const trimmed = part.trim()
+    if (!trimmed) return
+    const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/)
+    if (range) {
+      const start = Number(range[1])
+      const end = Number(range[2])
+      for (let chapter = start; chapter <= end; chapter += 1) chapters.push(chapter)
+      return
+    }
+    const single = Number(trimmed)
+    if (Number.isFinite(single)) chapters.push(single)
+  })
+  return chapters
+}
+
+const entityChapterNumbers = (entity: any) => {
+  const chapters = new Set<number>()
+  const add = (value: any) => {
+    const num = Number(value)
+    if (Number.isFinite(num) && num > 0) chapters.add(num)
+  }
+
+  ;(entity.source_quotes || []).forEach((item: any) => {
+    add(typeof item === 'number' ? item : item?.chapter)
+  })
+  ;(entity.chapter_appearances || []).forEach((item: any) => {
+    add(typeof item === 'number' ? item : item?.chapter)
+  })
+  ;(entity.source_chapters || []).forEach(add)
+  add(entity.first_appearance_chapter)
+  parseChapterRange(entity.chapter_range || '').forEach(add)
+
+  return chapters
+}
+
+const entityInScene = (entity: any, scene: any) => {
+  const sceneChapters = new Set(
+    (scene?.chapters || []).map((chapter: any) => Number(chapter)).filter((chapter: number) => Number.isFinite(chapter))
+  )
+  if (!sceneChapters.size) {
+    parseChapterRange(scene?.chapter_range || '').forEach((chapter) => sceneChapters.add(chapter))
+  }
+  if (!sceneChapters.size) return true
+  const chapters = entityChapterNumbers(entity)
+  if (!chapters.size) return false
+  return [...chapters].some((chapter) => sceneChapters.has(chapter))
+}
+
+const hasVisualAttributes = (entity: any) => {
+  const attrs = entity?.attributes
+  if (!attrs || typeof attrs !== 'object') return false
+  return JSON.stringify(attrs).replace(/[{}[\]":,\s]/g, '').length > 8
+}
+
+const taskPrefixForEntity = (entity: any) => {
+  if (entity.type === 'scene') return 'scene'
+  if (entity.type === 'item') return 'item'
+  return 'character'
+}
+
+type AutoWorkflowPhase = 'extract' | 'attribute' | 'prompt' | 'image' | 'done'
+type AutoWorkflowStatus = 'running' | 'paused' | 'failed' | 'completed'
+
+interface AutoWorkflowCheckpoint {
+  projectId: string
+  sceneId: string
+  sceneName?: string
+  extractionLevel: string
+  status: AutoWorkflowStatus
+  phase: AutoWorkflowPhase
+  progress: number
+  message: string
+  attributeDoneIds: string[]
+  promptDoneIds: string[]
+  imageRequestedIds: string[]
+  updatedAt: number
+  error?: string
+}
+
+const phaseLabels: Record<AutoWorkflowPhase, string> = {
+  extract: '识别出图对象',
+  attribute: '整理视觉设定',
+  prompt: '生成绘图指令',
+  image: '生成图片',
+  done: '完成',
+}
+
+const workflowStorageKey = (projectId: string, sceneId: string) =>
+  `ai-illustrator:auto-workflow:${projectId}:${sceneId}`
+
+const loadWorkflowCheckpoint = (projectId?: string, sceneId?: string | null): AutoWorkflowCheckpoint | null => {
+  if (!projectId || !sceneId || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(workflowStorageKey(projectId, sceneId))
+    if (!raw) return null
+    const checkpoint = JSON.parse(raw) as AutoWorkflowCheckpoint
+    if (checkpoint.projectId !== projectId || String(checkpoint.sceneId) !== String(sceneId)) return null
+    return {
+      ...checkpoint,
+      attributeDoneIds: checkpoint.attributeDoneIds || [],
+      promptDoneIds: checkpoint.promptDoneIds || [],
+      imageRequestedIds: checkpoint.imageRequestedIds || [],
+    }
+  } catch {
+    return null
+  }
+}
+
+const saveWorkflowCheckpoint = (checkpoint: AutoWorkflowCheckpoint) => {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(workflowStorageKey(checkpoint.projectId, checkpoint.sceneId), JSON.stringify(checkpoint))
+}
+
+const clearWorkflowCheckpoint = (projectId?: string, sceneId?: string | null) => {
+  if (!projectId || !sceneId || typeof window === 'undefined') return
+  window.localStorage.removeItem(workflowStorageKey(projectId, sceneId))
+}
+
+export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowComplete, onSelectedSceneChange }: PipelineControlProps) {
   const { runningStage, stageProgress, stageMessage, runStage, setStageMessage } = usePipelineStore()
   const { currentProject } = useProjectStore()
   const [sceneGroups, setSceneGroups] = useState<any[]>([])
@@ -93,11 +216,32 @@ export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlPr
   const [segmenting, setSegmenting] = useState(false)
   const [currentSuggestion, setCurrentSuggestion] = useState<SceneSuggestion | null>(null)
   const [segmentationError, setSegmentationError] = useState<string | null>(null)
+  const [autoRunning, setAutoRunning] = useState(false)
+  const [autoProgress, setAutoProgress] = useState(0)
+  const [autoMessage, setAutoMessage] = useState('')
+  const [autoCheckpoint, setAutoCheckpoint] = useState<AutoWorkflowCheckpoint | null>(null)
 
   useEffect(() => {
     if (!currentProject) return
     loadSceneGroups()
   }, [currentProject])
+
+  useEffect(() => {
+    if (autoRunning) return
+    if (!currentProject || !selectedGroup) {
+      setAutoCheckpoint(null)
+      setAutoMessage('')
+      setAutoProgress(0)
+      return
+    }
+
+    const checkpoint = loadWorkflowCheckpoint(currentProject.id, selectedGroup)
+    setAutoCheckpoint(checkpoint)
+    if (checkpoint && checkpoint.status !== 'completed') {
+      setAutoProgress(checkpoint.progress || 0)
+      setAutoMessage(`发现上次流程停在：${phaseLabels[checkpoint.phase]}，可继续`)
+    }
+  }, [currentProject?.id, selectedGroup, autoRunning])
 
   const loadSceneGroups = async () => {
     if (!currentProject) return
@@ -164,9 +308,209 @@ export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlPr
 
   const confirmedSceneGroups = sceneGroups.filter(isConfirmedScene)
   const nextSceneStartChapter = nextContiguousSceneStart(confirmedSceneGroups)
+  const selectedScene = selectedGroup
+    ? sceneGroups.find((group) => String(group.id) === String(selectedGroup))
+    : null
+  const hasPendingAutoCheckpoint = Boolean(autoCheckpoint && autoCheckpoint.status !== 'completed')
+
+  useEffect(() => {
+    onSelectedSceneChange?.(selectedScene || null)
+  }, [selectedScene, onSelectedSceneChange])
+
+  const runAiAndApply = async (payload: any) => {
+    const result = await api.ai.run(currentProject!.id, {
+      ...payload,
+      apply_result: true,
+    })
+    return result.run
+  }
+
+  const writeAutoCheckpoint = (patch: Partial<AutoWorkflowCheckpoint>) => {
+    if (!currentProject || !selectedGroup) return null
+    const previous = loadWorkflowCheckpoint(currentProject.id, selectedGroup) || autoCheckpoint
+    const next: AutoWorkflowCheckpoint = {
+      projectId: currentProject.id,
+      sceneId: selectedGroup,
+      sceneName: selectedScene?.name,
+      extractionLevel,
+      status: 'running',
+      phase: 'extract',
+      progress: 0,
+      message: '',
+      attributeDoneIds: [],
+      promptDoneIds: [],
+      imageRequestedIds: [],
+      ...(previous || {}),
+      ...patch,
+      updatedAt: Date.now(),
+    }
+    saveWorkflowCheckpoint(next)
+    setAutoCheckpoint(next)
+    return next
+  }
+
+  const handleClearAutoCheckpoint = () => {
+    if (!currentProject || !selectedGroup) return
+    clearWorkflowCheckpoint(currentProject.id, selectedGroup)
+    setAutoCheckpoint(null)
+    setAutoProgress(0)
+    setAutoMessage('')
+  }
+
+  const handleAutoIllustrateScene = async () => {
+    if (!currentProject || !selectedGroup || !selectedScene || autoRunning || runningStage) return
+
+    setAutoRunning(true)
+    setAutoProgress(0)
+    setAutoMessage('检查当前场景进度')
+    setStageMessage('一键出图：正在检查当前场景已完成内容')
+    writeAutoCheckpoint({
+      status: 'running',
+      phase: 'extract',
+      progress: 0,
+      message: '检查当前场景进度',
+      error: undefined,
+    })
+
+    const sceneRef = `scene:${selectedGroup}`
+    const baseRefs = ['data:world_bible', 'data:scene_groups', 'data:entities']
+    const refsWithScene = ['data:world_bible', 'data:scene_groups', sceneRef, 'data:entities', 'data:prompts']
+
+    try {
+      const loadSceneEntities = async () => {
+        const entityList = await api.entities.list(currentProject.id)
+        return entityList.filter((entity: any) => entityInScene(entity, selectedScene))
+      }
+
+      let sceneEntities = await loadSceneEntities()
+      if (!sceneEntities.length) {
+        setAutoMessage('识别出图对象')
+        setStageMessage('一键出图：正在识别当前场景出图对象')
+        writeAutoCheckpoint({
+          status: 'running',
+          phase: 'extract',
+          progress: 8,
+          message: '识别出图对象',
+        })
+        await runAiAndApply({
+          task: 'entity_extraction',
+          extraction_level: extractionLevel,
+          attachment_refs: ['data:world_bible', 'data:scene_groups', sceneRef, 'data:entities'],
+        })
+        sceneEntities = await loadSceneEntities()
+      }
+
+      setAutoProgress(18)
+      setAutoMessage('筛选当前场景对象')
+      writeAutoCheckpoint({
+        status: 'running',
+        phase: 'attribute',
+        progress: 18,
+        message: '筛选当前场景对象',
+      })
+      if (!sceneEntities.length) {
+        throw new Error('当前场景没有可处理的出图对象，请先确认章节段是否正确。')
+      }
+
+      const attributeTargets = sceneEntities.filter((entity: any) => !hasVisualAttributes(entity))
+      for (let index = 0; index < attributeTargets.length; index += 1) {
+        const entity = attributeTargets[index]
+        const progress = 18 + Math.round(((index + 1) / Math.max(attributeTargets.length, 1)) * 30)
+        setAutoMessage(`整理视觉设定：${entity.name || entity.id}`)
+        setAutoProgress(progress)
+        setStageMessage(`一键出图：整理视觉设定 ${index + 1}/${attributeTargets.length}`)
+        writeAutoCheckpoint({
+          status: 'running',
+          phase: 'attribute',
+          progress,
+          message: `整理视觉设定：${entity.name || entity.id}`,
+        })
+        const prefix = taskPrefixForEntity(entity)
+        await runAiAndApply({
+          task: `${prefix}_attribute`,
+          entity_id: entity.id,
+          attachment_refs: prefix === 'character' ? refsWithScene : [...baseRefs, sceneRef, 'data:prompts'],
+        })
+        const previous = loadWorkflowCheckpoint(currentProject.id, selectedGroup)
+        writeAutoCheckpoint({
+          attributeDoneIds: Array.from(new Set([...(previous?.attributeDoneIds || []), entity.id])),
+        })
+      }
+
+      sceneEntities = await loadSceneEntities()
+
+      const promptTargets = sceneEntities.filter((entity: any) => !entity.drawing_prompt)
+      for (let index = 0; index < promptTargets.length; index += 1) {
+        const entity = promptTargets[index]
+        const progress = 48 + Math.round(((index + 1) / Math.max(promptTargets.length, 1)) * 30)
+        setAutoMessage(`生成绘图指令：${entity.name || entity.id}`)
+        setAutoProgress(progress)
+        setStageMessage(`一键出图：生成绘图指令 ${index + 1}/${promptTargets.length}`)
+        writeAutoCheckpoint({
+          status: 'running',
+          phase: 'prompt',
+          progress,
+          message: `生成绘图指令：${entity.name || entity.id}`,
+        })
+        const prefix = taskPrefixForEntity(entity)
+        await runAiAndApply({
+          task: `${prefix}_prompt`,
+          entity_id: entity.id,
+          attachment_refs: [...baseRefs, sceneRef],
+        })
+        const previous = loadWorkflowCheckpoint(currentProject.id, selectedGroup)
+        writeAutoCheckpoint({
+          promptDoneIds: Array.from(new Set([...(previous?.promptDoneIds || []), entity.id])),
+        })
+      }
+
+      setAutoProgress(82)
+      setAutoMessage('并发生成图片')
+      setStageMessage('一键出图：正在并发生成未保存图片')
+      writeAutoCheckpoint({
+        status: 'running',
+        phase: 'image',
+        progress: 82,
+        message: '并发生成图片',
+      })
+      sceneEntities = await loadSceneEntities()
+      const imageTargets = sceneEntities
+        .filter((entity: any) => !entity.image_locked && entity.drawing_prompt && !entity.image_url)
+        .map((entity: any) => entity.id)
+
+      if (imageTargets.length) {
+        await api.images.generate(currentProject.id, {
+          entity_ids: imageTargets,
+          skip_locked: true,
+        })
+        writeAutoCheckpoint({
+          imageRequestedIds: imageTargets,
+        })
+      }
+
+      setAutoProgress(100)
+      setAutoMessage(`完成：处理 ${sceneEntities.length} 个对象，生成 ${imageTargets.length} 张未保存图片`)
+      setStageMessage(`一键出图完成：处理 ${sceneEntities.length} 个对象，生成 ${imageTargets.length} 张未保存图片`)
+      clearWorkflowCheckpoint(currentProject.id, selectedGroup)
+      setAutoCheckpoint(null)
+      await onAutoWorkflowComplete?.()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '一键出图失败'
+      setAutoMessage(message)
+      setStageMessage(`一键出图失败：${message}`)
+      writeAutoCheckpoint({
+        status: 'failed',
+        message,
+        error: message,
+      })
+      window.alert(message)
+    } finally {
+      setAutoRunning(false)
+    }
+  }
 
   const handleRun = (stageKey: string, needChapter: boolean) => {
-    if (!currentProject || runningStage) return
+    if (!currentProject || runningStage || autoRunning) return
     if (['world_bible', 'extract', 'attribute', 'prompt'].includes(stageKey)) {
       setStageMessage('这一步需要先到 AI 工作台查看发送给 API 的指令，确认或手动修改后再执行。')
       onOpenAiWorkspace?.(
@@ -297,6 +641,33 @@ export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlPr
           ))}
         </div>
 
+        <button
+          type="button"
+          title={selectedGroup ? '按顺序识别对象、整理设定、生成指令并出图' : '先选择章节段'}
+          disabled={!selectedGroup || autoRunning || !!runningStage}
+          onClick={handleAutoIllustrateScene}
+          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            !selectedGroup || autoRunning || !!runningStage
+              ? 'cursor-not-allowed bg-elevated/50 text-text-muted'
+              : 'bg-accent text-white hover:bg-accent-hover'
+          }`}
+        >
+          {autoRunning ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+          {hasPendingAutoCheckpoint ? '继续一键出图' : '一键出图当前场景'}
+        </button>
+
+        {hasPendingAutoCheckpoint && !autoRunning && (
+          <button
+            type="button"
+            title="只清除本场景的一键流程记录，不删除已生成内容"
+            onClick={handleClearAutoCheckpoint}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-text-muted hover:bg-elevated hover:text-text-primary transition-colors"
+          >
+            <X size={12} />
+            清除记录
+          </button>
+        )}
+
         {/* 流水线步骤 */}
         <div className="flex items-center gap-2 flex-1 overflow-x-auto py-1">
           {stages.map((s) => {
@@ -328,18 +699,24 @@ export default function PipelineControl({ onOpenAiWorkspace }: PipelineControlPr
         </div>
 
         {/* 运行状态 */}
-        {runningStage && (
+        {(runningStage || autoRunning) && (
           <div className="flex items-center gap-2 shrink-0">
             <div className="w-32 h-1.5 bg-elevated rounded-full overflow-hidden">
               <div
                 className="h-full bg-accent rounded-full transition-all duration-300 ease-out"
-                style={{ width: `${stageProgress}%` }}
+                style={{ width: `${autoRunning ? autoProgress : stageProgress}%` }}
               />
             </div>
-            <span className="text-xs text-text-muted">{stageProgress}%</span>
+            <span className="text-xs text-text-muted">{autoRunning ? autoProgress : stageProgress}%</span>
           </div>
         )}
       </div>
+
+      {autoMessage && (
+        <div className={`mt-1 text-xs ${autoRunning ? 'text-accent' : autoProgress === 100 ? 'text-success' : 'text-text-muted'}`}>
+          {autoMessage}
+        </div>
+      )}
 
       {/* 智能分段弹窗 */}
       {showSceneSegmentation && (

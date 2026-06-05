@@ -200,6 +200,8 @@ export const api = {
       )
       return (res.images || []).map((img: any) => ({
         ...img,
+        id: img.id || img.path || img.url || img.filename,
+        path: img.path || img.url,
         url: normalizeAssetUrl(img.path || img.url),
         name: img.filename || img.name,
       }))
@@ -216,6 +218,11 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ locked }),
       }),
+    delete: (projectId: string, path: string) =>
+      request<any>(`/projects/${projectId}/images`, {
+        method: 'DELETE',
+        body: JSON.stringify({ path }),
+      }),
   },
   settings: {
     get: () => request<any>('/settings'),
@@ -224,7 +231,10 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(data),
       }),
-    testConnection: () =>
-      request<any>('/settings/test-connection', { method: 'POST' }),
+    testConnection: (data?: any) =>
+      request<any>('/settings/test-connection', {
+        method: 'POST',
+        body: JSON.stringify(data || {}),
+      }),
   },
 }

@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, List
 import json
 import asyncio
+import time
 from pathlib import Path
 
 
@@ -22,6 +23,13 @@ class LLMAdapter:
         self.base_url = self.llm_config.get('base_url', 'https://api.deepseek.com/v1')
         self.temperature = self.llm_config.get('temperature', 0.3)
         self.max_tokens = self.llm_config.get('max_tokens', 4096)
+        configured_retries = self.llm_config.get('max_retries', 3)
+        try:
+            configured_retries = int(configured_retries)
+        except (TypeError, ValueError):
+            configured_retries = 3
+        self.max_retries = min(3, max(1, configured_retries))
+        self.retry_delay = float(self.llm_config.get('retry_delay', 1) or 1)
         
         self._client = None
 
@@ -37,6 +45,30 @@ class LLMAdapter:
                 raise ImportError("请安装 litellm: pip install litellm")
         
         return self._client
+
+    def _run_with_retries(self, operation):
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                return operation()
+            except Exception as exc:
+                last_error = exc
+                if attempt == self.max_retries - 1:
+                    break
+                time.sleep(self.retry_delay * (2 ** attempt))
+        raise RuntimeError(f"LLM 调用失败，已尝试 {self.max_retries} 次: {last_error}") from last_error
+
+    async def _run_with_retries_async(self, operation):
+        last_error = None
+        for attempt in range(self.max_retries):
+            try:
+                return await operation()
+            except Exception as exc:
+                last_error = exc
+                if attempt == self.max_retries - 1:
+                    break
+                await asyncio.sleep(self.retry_delay * (2 ** attempt))
+        raise RuntimeError(f"LLM 调用失败，已尝试 {self.max_retries} 次: {last_error}") from last_error
 
     def generate(
         self,
@@ -79,17 +111,19 @@ class LLMAdapter:
         temp = temperature if temperature is not None else self.temperature
         tokens = max_tokens or self.max_tokens
         
-        response = client.completion(
-            model=model_name,
-            messages=messages,
-            temperature=temp,
-            max_tokens=tokens,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            **kwargs
-        )
-        
-        return response['choices'][0]['message']['content']
+        def call_llm():
+            response = client.completion(
+                model=model_name,
+                messages=messages,
+                temperature=temp,
+                max_tokens=tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                **kwargs
+            )
+            return response['choices'][0]['message']['content']
+
+        return self._run_with_retries(call_llm)
 
     async def generate_async(
         self,
@@ -132,17 +166,19 @@ class LLMAdapter:
         temp = temperature if temperature is not None else self.temperature
         tokens = max_tokens or self.max_tokens
         
-        response = await client.acompletion(
-            model=model_name,
-            messages=messages,
-            temperature=temp,
-            max_tokens=tokens,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            **kwargs
-        )
-        
-        return response['choices'][0]['message']['content']
+        async def call_llm():
+            response = await client.acompletion(
+                model=model_name,
+                messages=messages,
+                temperature=temp,
+                max_tokens=tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                **kwargs
+            )
+            return response['choices'][0]['message']['content']
+
+        return await self._run_with_retries_async(call_llm)
 
     def generate_json(
         self,
@@ -190,19 +226,20 @@ class LLMAdapter:
         
         model_name = model or self.model
         
-        response = client.completion(
-            model=model_name,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            **kwargs
-        )
-        
-        content = response['choices'][0]['message']['content']
-        
-        return self._parse_json_response(content)
+        def call_llm():
+            response = client.completion(
+                model=model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                **kwargs
+            )
+            content = response['choices'][0]['message']['content']
+            return self._parse_json_response(content)
+
+        return self._run_with_retries(call_llm)
 
     async def generate_json_async(
         self,
@@ -250,19 +287,20 @@ class LLMAdapter:
         
         model_name = model or self.model
         
-        response = await client.acompletion(
-            model=model_name,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            **kwargs
-        )
-        
-        content = response['choices'][0]['message']['content']
-        
-        return self._parse_json_response(content)
+        async def call_llm():
+            response = await client.acompletion(
+                model=model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                **kwargs
+            )
+            content = response['choices'][0]['message']['content']
+            return self._parse_json_response(content)
+
+        return await self._run_with_retries_async(call_llm)
 
     async def generate_json_with_raw_async(
         self,
@@ -290,23 +328,25 @@ class LLMAdapter:
             {"role": "user", "content": prompt},
         ]
 
-        response = await client.acompletion(
-            model=model or self.model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            api_key=self.api_key,
-            base_url=self.base_url,
-            **kwargs
-        )
+        async def call_llm():
+            response = await client.acompletion(
+                model=model or self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+                **kwargs
+            )
+            raw_content = response['choices'][0]['message']['content']
+            return {
+                "raw_output": raw_content,
+                "parsed_output": self._parse_json_response(raw_content),
+                "system_prompt": final_system_prompt,
+                "user_prompt": prompt,
+            }
 
-        raw_content = response['choices'][0]['message']['content']
-        return {
-            "raw_output": raw_content,
-            "parsed_output": self._parse_json_response(raw_content),
-            "system_prompt": final_system_prompt,
-            "user_prompt": prompt,
-        }
+        return await self._run_with_retries_async(call_llm)
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """解析JSON响应
