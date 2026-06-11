@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, Bot, CheckCircle, Eye, FileText, Layers, Loader2, MessageSquare, Play, RefreshCw, RotateCcw } from 'lucide-react'
+import { AlertCircle, Bot, CheckCircle, Eye, FileText, Layers, Loader2, MessageSquare, Play, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { api } from '@/api/client'
 
 interface AiWorkspaceProps {
@@ -403,6 +403,24 @@ export default function AiWorkspace({
     }
   }
 
+  const handleDeleteRun = async (run: any) => {
+    if (!run?.id) return
+    const confirmed = window.confirm('确定删除这条 AI 调用记录吗？\n\n只删除记录，不会删除已写入项目的数据。')
+    if (!confirmed) return
+
+    setError('')
+    try {
+      await api.ai.deleteRun(projectId, run.id)
+      setRuns((current) => current.filter((item) => item.id !== run.id))
+      if (currentRun?.id === run.id) {
+        setCurrentRun(null)
+        setFollowupRunId(null)
+      }
+    } catch (e: any) {
+      setError(e.message || '删除 AI 调用记录失败')
+    }
+  }
+
   const handleFollowup = () => {
     if (!currentRun?.id) return
     setFollowupRunId(currentRun.id)
@@ -789,33 +807,46 @@ export default function AiWorkspace({
                 <div className="text-xs text-text-muted">暂无 AI 调用记录</div>
               ) : (
                 runs.map((run) => (
-                  <button
+                  <div
                     key={run.id}
-                    onClick={() => {
-                      setCurrentRun(run)
-                      setPrepared({
-                        task: run.task,
-                        context: run.context,
-                        attachments: run.attachments,
-                        system_prompt: run.system_prompt,
-                        user_prompt: run.user_prompt,
-                        execution_sources: run.execution_sources,
-                      })
-                      setSelectedTask(run.task)
-                      setExtraInstruction(run.extra_instruction || '')
-                      setFollowupRunId(run.followup_run_id || null)
-                      setEditableSystemPrompt(run.system_prompt || '')
-                      setEditableUserPrompt(run.user_prompt || '')
-                      setAttachmentRefs((run.attachments || []).map((item: any) => item.ref).filter(Boolean))
-                    }}
-                    className="w-full text-left p-3 rounded-lg border border-border bg-base hover:border-border-hover transition-colors"
+                    className="flex items-start gap-2 rounded-lg border border-border bg-base p-3 hover:border-border-hover transition-colors"
                   >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-text-primary truncate">{run.task}</span>
-                      {run.applied && <CheckCircle size={14} className="text-success shrink-0" />}
-                    </div>
-                    <div className="text-xs text-text-muted mt-1">{run.created_at}</div>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCurrentRun(run)
+                        setPrepared({
+                          task: run.task,
+                          context: run.context,
+                          attachments: run.attachments,
+                          system_prompt: run.system_prompt,
+                          user_prompt: run.user_prompt,
+                          execution_sources: run.execution_sources,
+                        })
+                        setSelectedTask(run.task)
+                        setExtraInstruction(run.extra_instruction || '')
+                        setFollowupRunId(run.followup_run_id || null)
+                        setEditableSystemPrompt(run.system_prompt || '')
+                        setEditableUserPrompt(run.user_prompt || '')
+                        setAttachmentRefs((run.attachments || []).map((item: any) => item.ref).filter(Boolean))
+                      }}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm text-text-primary truncate">{run.task}</span>
+                        {run.applied && <CheckCircle size={14} className="text-success shrink-0" />}
+                      </div>
+                      <div className="text-xs text-text-muted mt-1">{run.created_at}</div>
+                    </button>
+                    <button
+                      type="button"
+                      title="删除这条记录"
+                      onClick={() => handleDeleteRun(run)}
+                      className="shrink-0 rounded-md p-1 text-text-muted hover:bg-error/10 hover:text-error"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
                 ))
               )}
             </div>

@@ -288,7 +288,7 @@ def group_start_chapter(group: dict) -> int:
 def confirmed_scene_groups(groups: list[dict]) -> list[dict]:
     return [
         group for group in groups
-        if group.get("source") in {"ai", "manual"}
+        if not group.get("source") or group.get("source") in {"ai", "manual"}
     ]
 
 
@@ -336,6 +336,14 @@ async def auto_detect_scene_groups(project_id: str):
     chapters = store.load_chapters(project_id)
     if not chapters:
         return {"groups": [], "total": 0}
+
+    existing_groups = load_scene_groups(project_id)
+    if confirmed_scene_groups(existing_groups):
+        return {
+            "groups": existing_groups,
+            "total": len(existing_groups),
+            "message": "已有智能分场景结果，快速检查不会覆盖现有场景列表。",
+        }
     
     entities = store.load_entities(project_id)
     
@@ -357,7 +365,8 @@ async def auto_detect_scene_groups(project_id: str):
                     "name": name,
                     "chapter_range": chapter_range,
                     "chapters": parse_chapter_range(chapter_range),
-                    "description": scene.get("attributes", {}).get("visual_description", "")
+                    "description": scene.get("attributes", {}).get("visual_description", ""),
+                    "source": "ai",
                 }
                 groups.append(group)
     

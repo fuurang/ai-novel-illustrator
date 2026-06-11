@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
-from src.api.routers import projects, pipeline, entities, world_bible, images, settings, chapters, prompts, ai_workspace
+from src.api.routers import projects, pipeline, entities, world_bible, images, settings, chapters, prompts, ai_workspace, auto_illustration
 
 
 def create_app() -> FastAPI:
@@ -29,6 +29,7 @@ def create_app() -> FastAPI:
     app.include_router(images.router, prefix="/api/projects", tags=["images"])
     app.include_router(chapters.router, prefix="/api/projects", tags=["chapters"])
     app.include_router(ai_workspace.router, prefix="/api/projects", tags=["ai_workspace"])
+    app.include_router(auto_illustration.router, prefix="/api/projects", tags=["auto_illustration"])
     app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
     app.include_router(prompts.router, prefix="/api/prompts", tags=["prompts"])
 

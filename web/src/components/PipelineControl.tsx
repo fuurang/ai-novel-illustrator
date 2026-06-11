@@ -1,7 +1,7 @@
-import { Play, Loader2, Circle, MapPin, RefreshCw, ChevronDown, ChevronUp, Check, X, Wand2 } from 'lucide-react'
+import { Play, Loader2, Circle, MapPin, RefreshCw, ChevronDown, ChevronUp, Check, X, Wand2, Pause, Square, AlertTriangle, BookOpen } from 'lucide-react'
 import { usePipelineStore } from '@/stores/pipelineStore'
 import { useProjectStore } from '@/stores/projectStore'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '@/api/client'
 
 const stages = [
@@ -35,7 +35,7 @@ interface SceneSuggestion {
   reasoning?: string
 }
 
-const isConfirmedScene = (group: any) => group?.source === 'ai' || group?.source === 'manual'
+const isConfirmedScene = (group: any) => !group?.source || group.source === 'ai' || group.source === 'manual'
 
 const sceneEndChapter = (group: any) => {
   if (Array.isArray(group?.chapters) && group.chapters.length > 0) {
@@ -146,6 +146,42 @@ const taskPrefixForEntity = (entity: any) => {
 type AutoWorkflowPhase = 'extract' | 'attribute' | 'prompt' | 'image' | 'done'
 type AutoWorkflowStatus = 'running' | 'paused' | 'failed' | 'completed'
 
+type BookAutoStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped'
+type BookAutoPhase = 'segment' | 'extract' | 'attribute' | 'prompt' | 'image' | 'skip' | 'done'
+
+interface BookAutoFailedStep {
+  id?: string
+  phase?: string
+  step?: string
+  message?: string
+  attempts?: number
+  skipped?: boolean
+  scene_name?: string
+  entity_name?: string
+  created_at?: string
+}
+
+interface BookAutoState {
+  status: BookAutoStatus
+  scene_granularity: string
+  extraction_level: string
+  skip_locked?: boolean
+  current_scene_id?: string
+  current_scene_name?: string
+  current_phase: BookAutoPhase
+  current_chapter: number
+  last_completed_chapter: number
+  total_chapters: number
+  completed_scene_ids: string[]
+  skipped_scene_ids: string[]
+  failed_steps: BookAutoFailedStep[]
+  pause_requested?: boolean
+  stop_requested?: boolean
+  message: string
+  progress: number
+  updated_at?: string
+}
+
 interface AutoWorkflowCheckpoint {
   projectId: string
   sceneId: string
@@ -168,6 +204,25 @@ const phaseLabels: Record<AutoWorkflowPhase, string> = {
   prompt: '生成绘图指令',
   image: '生成图片',
   done: '完成',
+}
+
+const bookAutoPhaseLabels: Record<BookAutoPhase, string> = {
+  segment: '智能分场景',
+  extract: '识别出图对象',
+  attribute: '补全视觉设定',
+  prompt: '生成绘图指令',
+  image: '生成图片',
+  skip: '跳过并记录',
+  done: '完成',
+}
+
+const bookAutoStatusLabels: Record<BookAutoStatus, string> = {
+  idle: '未启动',
+  running: '运行中',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '异常停止',
+  stopped: '已停止',
 }
 
 const workflowStorageKey = (projectId: string, sceneId: string) =>
@@ -220,11 +275,83 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
   const [autoProgress, setAutoProgress] = useState(0)
   const [autoMessage, setAutoMessage] = useState('')
   const [autoCheckpoint, setAutoCheckpoint] = useState<AutoWorkflowCheckpoint | null>(null)
+  const [showFullAutoDialog, setShowFullAutoDialog] = useState(false)
+  const [fullAutoConfig, setFullAutoConfig] = useState({
+    scene_granularity: 'medium',
+    extraction_level: 'balanced',
+    skip_locked: true,
+  })
+  const [fullAutoStatus, setFullAutoStatus] = useState<BookAutoState | null>(null)
+  const [fullAutoBusy, setFullAutoBusy] = useState(false)
+  const [showFullAutoFailures, setShowFullAutoFailures] = useState(false)
+  const previousFullAutoStatus = useRef<BookAutoStatus | null>(null)
+  const fullAutoRunning = fullAutoStatus?.status === 'running'
+  const fullAutoPaused = fullAutoStatus?.status === 'paused'
+  const fullAutoVisible = Boolean(fullAutoStatus && fullAutoStatus.status !== 'idle')
+  const fullAutoFailures = fullAutoStatus?.failed_steps || []
 
   useEffect(() => {
     if (!currentProject) return
     loadSceneGroups()
   }, [currentProject])
+
+  useEffect(() => {
+    if (!currentProject) {
+      setFullAutoStatus(null)
+      return
+    }
+
+    let closed = false
+    let source: EventSource | null = null
+
+    const loadStatus = async () => {
+      try {
+        const status = await api.autoIllustration.status(currentProject.id)
+        if (!closed) setFullAutoStatus(status)
+      } catch (error) {
+        console.error('加载全书自动出图状态失败', error)
+      }
+    }
+
+    loadStatus()
+    try {
+      source = api.autoIllustration.events(currentProject.id)
+      source.onmessage = (event) => {
+        try {
+          const status = JSON.parse(event.data)
+          if (!closed) setFullAutoStatus(status)
+        } catch {}
+      }
+      source.onerror = () => {
+        source?.close()
+        source = null
+      }
+    } catch (error) {
+      console.error('连接全书自动出图事件失败', error)
+    }
+
+    const timer = window.setInterval(() => {
+      if (!source || source.readyState === EventSource.CLOSED) {
+        loadStatus()
+      }
+    }, 5000)
+
+    return () => {
+      closed = true
+      source?.close()
+      window.clearInterval(timer)
+    }
+  }, [currentProject?.id])
+
+  useEffect(() => {
+    const current = fullAutoStatus?.status || null
+    const previous = previousFullAutoStatus.current
+    if (current === 'completed' && previous !== 'completed') {
+      loadSceneGroups()
+      onAutoWorkflowComplete?.()
+    }
+    previousFullAutoStatus.current = current
+  }, [fullAutoStatus?.status])
 
   useEffect(() => {
     if (autoRunning) return
@@ -270,7 +397,7 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
 
   // 智能分段识别一个场景
   const handleSegmentOneScene = async () => {
-    if (!currentProject || segmenting) return
+    if (!currentProject || segmenting || fullAutoRunning) return
     setSegmenting(true)
     setSegmentationError(null)
 
@@ -357,8 +484,63 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
     setAutoMessage('')
   }
 
+  const handleStartFullAuto = async () => {
+    if (!currentProject || fullAutoBusy || fullAutoRunning || runningStage || autoRunning) return
+    setFullAutoBusy(true)
+    try {
+      const status = await api.autoIllustration.start(currentProject.id, fullAutoConfig)
+      setFullAutoStatus(status)
+      setShowFullAutoDialog(false)
+      setStageMessage('全书自动出图已启动，后端会持续分场景并出图。')
+    } catch (error: any) {
+      window.alert(error.message || '启动全书自动出图失败')
+    } finally {
+      setFullAutoBusy(false)
+    }
+  }
+
+  const handlePauseFullAuto = async () => {
+    if (!currentProject || fullAutoBusy) return
+    setFullAutoBusy(true)
+    try {
+      setFullAutoStatus(await api.autoIllustration.pause(currentProject.id))
+    } catch (error: any) {
+      window.alert(error.message || '暂停失败')
+    } finally {
+      setFullAutoBusy(false)
+    }
+  }
+
+  const handleResumeFullAuto = async () => {
+    if (!currentProject || fullAutoBusy || runningStage || autoRunning) return
+    setFullAutoBusy(true)
+    try {
+      setFullAutoStatus(await api.autoIllustration.resume(currentProject.id))
+      setStageMessage('全书自动出图已继续运行。')
+    } catch (error: any) {
+      window.alert(error.message || '继续失败')
+    } finally {
+      setFullAutoBusy(false)
+    }
+  }
+
+  const handleStopFullAuto = async () => {
+    if (!currentProject || fullAutoBusy) return
+    const confirmed = window.confirm('停止后不会删除已生成内容；再次开始会根据已覆盖章节继续。确定停止吗？')
+    if (!confirmed) return
+    setFullAutoBusy(true)
+    try {
+      setFullAutoStatus(await api.autoIllustration.stop(currentProject.id))
+      setStageMessage('已请求停止全书自动出图。')
+    } catch (error: any) {
+      window.alert(error.message || '停止失败')
+    } finally {
+      setFullAutoBusy(false)
+    }
+  }
+
   const handleAutoIllustrateScene = async () => {
-    if (!currentProject || !selectedGroup || !selectedScene || autoRunning || runningStage) return
+    if (!currentProject || !selectedGroup || !selectedScene || autoRunning || runningStage || fullAutoRunning) return
 
     setAutoRunning(true)
     setAutoProgress(0)
@@ -510,7 +692,7 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
   }
 
   const handleRun = (stageKey: string, needChapter: boolean) => {
-    if (!currentProject || runningStage || autoRunning) return
+    if (!currentProject || runningStage || autoRunning || fullAutoRunning) return
     if (['world_bible', 'extract', 'attribute', 'prompt'].includes(stageKey)) {
       setStageMessage('这一步需要先到 AI 工作台查看发送给 API 的指令，确认或手动修改后再执行。')
       onOpenAiWorkspace?.(
@@ -644,16 +826,31 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
         <button
           type="button"
           title={selectedGroup ? '按顺序识别对象、整理设定、生成指令并出图' : '先选择章节段'}
-          disabled={!selectedGroup || autoRunning || !!runningStage}
+          disabled={!selectedGroup || autoRunning || !!runningStage || fullAutoRunning}
           onClick={handleAutoIllustrateScene}
           className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-            !selectedGroup || autoRunning || !!runningStage
+            !selectedGroup || autoRunning || !!runningStage || fullAutoRunning
               ? 'cursor-not-allowed bg-elevated/50 text-text-muted'
               : 'bg-accent text-white hover:bg-accent-hover'
           }`}
         >
           {autoRunning ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
           {hasPendingAutoCheckpoint ? '继续一键出图' : '一键出图当前场景'}
+        </button>
+
+        <button
+          type="button"
+          title="后端自动循环：分下一个场景、识别对象、生成指令并出图，直到全书完成或手动暂停"
+          disabled={autoRunning || !!runningStage || fullAutoRunning}
+          onClick={() => setShowFullAutoDialog(true)}
+          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+            autoRunning || !!runningStage || fullAutoRunning
+              ? 'cursor-not-allowed bg-elevated/50 text-text-muted'
+              : 'bg-success text-white hover:bg-success/90'
+          }`}
+        >
+          {fullAutoRunning ? <Loader2 size={14} className="animate-spin" /> : <BookOpen size={14} />}
+          全书自动出图
         </button>
 
         {hasPendingAutoCheckpoint && !autoRunning && (
@@ -678,7 +875,7 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
               <button
                 key={s.key}
                 onClick={() => handleRun(s.key, s.needChapter)}
-                disabled={!!runningStage || needsSelection}
+                disabled={!!runningStage || needsSelection || fullAutoRunning}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-200 whitespace-nowrap ${
                   isRunning
                     ? 'bg-accent text-white'
@@ -699,15 +896,17 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
         </div>
 
         {/* 运行状态 */}
-        {(runningStage || autoRunning) && (
+        {(runningStage || autoRunning || fullAutoRunning) && (
           <div className="flex items-center gap-2 shrink-0">
             <div className="w-32 h-1.5 bg-elevated rounded-full overflow-hidden">
               <div
                 className="h-full bg-accent rounded-full transition-all duration-300 ease-out"
-                style={{ width: `${autoRunning ? autoProgress : stageProgress}%` }}
+                style={{ width: `${fullAutoRunning ? fullAutoStatus?.progress || 0 : autoRunning ? autoProgress : stageProgress}%` }}
               />
             </div>
-            <span className="text-xs text-text-muted">{autoRunning ? autoProgress : stageProgress}%</span>
+            <span className="text-xs text-text-muted">
+              {fullAutoRunning ? fullAutoStatus?.progress || 0 : autoRunning ? autoProgress : stageProgress}%
+            </span>
           </div>
         )}
       </div>
@@ -719,6 +918,201 @@ export default function PipelineControl({ onOpenAiWorkspace, onAutoWorkflowCompl
       )}
 
       {/* 智能分段弹窗 */}
+      {fullAutoVisible && fullAutoStatus && (
+        <div className="mt-2 rounded-lg border border-border bg-base p-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className={`rounded px-2 py-0.5 ${
+                  fullAutoRunning
+                    ? 'bg-accent/10 text-accent'
+                    : fullAutoStatus.status === 'completed'
+                    ? 'bg-success/10 text-success'
+                    : 'bg-elevated text-text-secondary'
+                }`}>
+                  {bookAutoStatusLabels[fullAutoStatus.status] || fullAutoStatus.status}
+                </span>
+                <span className="text-text-secondary">
+                  {bookAutoPhaseLabels[fullAutoStatus.current_phase] || fullAutoStatus.current_phase}
+                </span>
+                <span className="text-text-muted">第 {fullAutoStatus.current_chapter || 1} 章起</span>
+                <span className="text-text-muted">
+                  已完成到第 {fullAutoStatus.last_completed_chapter || 0}/{fullAutoStatus.total_chapters || 0} 章
+                </span>
+              </div>
+              <div className="mt-2 h-1.5 w-full max-w-xl overflow-hidden rounded-full bg-elevated">
+                <div
+                  className="h-full rounded-full bg-accent transition-all duration-300"
+                  style={{ width: `${Math.max(0, Math.min(100, fullAutoStatus.progress || 0))}%` }}
+                />
+              </div>
+              <div className="mt-2 text-xs text-text-secondary line-clamp-2">
+                {fullAutoStatus.current_scene_name ? `当前场景：${fullAutoStatus.current_scene_name}。` : ''}
+                {fullAutoStatus.message}
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-wrap items-center gap-2">
+              {fullAutoRunning && (
+                <button
+                  type="button"
+                  onClick={handlePauseFullAuto}
+                  disabled={fullAutoBusy}
+                  className="inline-flex items-center gap-1 rounded-md bg-elevated px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-50"
+                >
+                  <Pause size={12} />
+                  暂停
+                </button>
+              )}
+              {(fullAutoPaused || fullAutoStatus.status === 'failed' || fullAutoStatus.status === 'stopped') && (
+                <button
+                  type="button"
+                  onClick={handleResumeFullAuto}
+                  disabled={fullAutoBusy || !!runningStage || autoRunning}
+                  className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1.5 text-xs text-white hover:bg-accent/90 disabled:opacity-50"
+                >
+                  <Play size={12} />
+                  继续
+                </button>
+              )}
+              {fullAutoStatus.status !== 'completed' && fullAutoStatus.status !== 'stopped' && (
+                <button
+                  type="button"
+                  onClick={handleStopFullAuto}
+                  disabled={fullAutoBusy}
+                  className="inline-flex items-center gap-1 rounded-md bg-error/10 px-2.5 py-1.5 text-xs text-error hover:bg-error/20 disabled:opacity-50"
+                >
+                  <Square size={12} />
+                  停止
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowFullAutoFailures((value) => !value)}
+                className="inline-flex items-center gap-1 rounded-md bg-elevated px-2.5 py-1.5 text-xs text-text-secondary hover:text-text-primary"
+              >
+                <AlertTriangle size={12} />
+                失败记录 {fullAutoFailures.length}
+              </button>
+            </div>
+          </div>
+
+          {showFullAutoFailures && (
+            <div className="mt-3 max-h-44 overflow-y-auto rounded-md border border-border bg-surface p-2">
+              {fullAutoFailures.length === 0 ? (
+                <div className="text-xs text-text-muted">暂无失败或跳过记录</div>
+              ) : (
+                <div className="space-y-2">
+                  {fullAutoFailures.slice(0, 20).map((item, index) => (
+                    <div key={item.id || index} className="text-xs text-text-secondary">
+                      <div className="font-medium text-text-primary">
+                        {item.scene_name || '未命名场景'}
+                        {item.entity_name ? ` / ${item.entity_name}` : ''}
+                      </div>
+                      <div className="mt-0.5 text-text-muted">
+                        [{item.phase || item.step || 'step'}] {item.message || '失败后已跳过'}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {showFullAutoDialog && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
+          <div className="bg-surface rounded-xl p-5 w-[520px] max-w-[92vw] border border-border">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="font-semibold text-text-primary">全书自动出图</h3>
+              <button
+                type="button"
+                onClick={() => setShowFullAutoDialog(false)}
+                className="p-1.5 rounded-md hover:bg-elevated text-text-muted"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <div className="mb-2 text-xs font-medium text-text-primary">分场景粒度</div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
+                  {sceneGranularityLevels.map((level) => (
+                    <button
+                      key={level.key}
+                      type="button"
+                      onClick={() => setFullAutoConfig((value) => ({ ...value, scene_granularity: level.key }))}
+                      className={`rounded-md px-2 py-1.5 text-xs transition-colors ${
+                        fullAutoConfig.scene_granularity === level.key
+                          ? 'bg-accent text-white'
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                      title={level.desc}
+                    >
+                      {level.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="mt-2 text-[11px] text-text-muted">
+                  后端会持续读取后续章节，由 AI 判断第一个自然场景边界。
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-xs font-medium text-text-primary">出图对象识别档位</div>
+                <div className="grid grid-cols-3 gap-1 rounded-lg bg-elevated p-1">
+                  {extractionLevels.map((level) => (
+                    <button
+                      key={level.key}
+                      type="button"
+                      onClick={() => setFullAutoConfig((value) => ({ ...value, extraction_level: level.key }))}
+                      className={`rounded-md px-2 py-1.5 text-xs transition-colors ${
+                        fullAutoConfig.extraction_level === level.key
+                          ? 'bg-accent text-white'
+                          : 'text-text-muted hover:text-text-primary'
+                      }`}
+                    >
+                      {level.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs text-text-secondary">
+                <input
+                  type="checkbox"
+                  checked={fullAutoConfig.skip_locked}
+                  onChange={(event) => setFullAutoConfig((value) => ({ ...value, skip_locked: event.target.checked }))}
+                  className="h-4 w-4 accent-accent"
+                />
+                跳过已保存或已锁定图片
+              </label>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowFullAutoDialog(false)}
+                className="rounded-md bg-elevated px-4 py-2 text-sm text-text-secondary hover:text-text-primary"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleStartFullAuto}
+                disabled={fullAutoBusy || fullAutoRunning || !!runningStage || autoRunning}
+                className="inline-flex items-center gap-2 rounded-md bg-accent px-4 py-2 text-sm text-white hover:bg-accent/90 disabled:opacity-50"
+              >
+                {fullAutoBusy ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
+                启动
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showSceneSegmentation && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100]">
           <div className="bg-surface rounded-xl p-5 w-[500px] max-w-[90vw] border border-border">

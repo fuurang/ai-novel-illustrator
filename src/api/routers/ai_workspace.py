@@ -209,7 +209,7 @@ def _scene_group_start_chapter(group: dict) -> int:
 def _confirmed_scene_groups(groups: List[dict]) -> List[dict]:
     return [
         group for group in groups
-        if group.get("source") in {"ai", "manual"}
+        if not group.get("source") or group.get("source") in {"ai", "manual"}
     ]
 
 
@@ -1599,10 +1599,22 @@ def _apply_result(project_id: str, request: AiRunRequest, parsed: Dict[str, Any]
         existing_groups = _load_scene_groups(project_id)
         chapters = store.load_chapters(project_id)
         fallback_start = request.start_chapter or _next_scene_start_chapter(chapters, existing_groups)
-        analyzed_max = max(
-            [_chapter_number(chapter, index + 1) for index, chapter in enumerate(chapters) if _chapter_number(chapter, index + 1) >= fallback_start],
-            default=fallback_start,
-        )
+        internal_read_chapters = parsed.get("analysis", {}).get("internal_read_chapters", [])
+        analyzed_max = 0
+        if isinstance(internal_read_chapters, list):
+            try:
+                analyzed_max = max(
+                    int(chapter)
+                    for chapter in internal_read_chapters
+                    if int(chapter) >= fallback_start
+                )
+            except Exception:
+                analyzed_max = 0
+        if not analyzed_max:
+            analyzed_max = max(
+                [_chapter_number(chapter, index + 1) for index, chapter in enumerate(chapters) if _chapter_number(chapter, index + 1) >= fallback_start],
+                default=fallback_start,
+            )
         start_ch = int(scene_data.get("start_chapter", fallback_start) or fallback_start)
         end_ch = int(scene_data.get("end_chapter", start_ch) or start_ch)
 
@@ -1731,6 +1743,20 @@ async def list_ai_runs(project_id: str, limit: int = 30):
     if not store.project_exists(project_id):
         raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
     return {"runs": [_public_run(run) for run in store.load_ai_runs(project_id)[:limit]]}
+
+
+@router.delete("/{project_id}/ai/runs/{run_id}")
+async def delete_ai_run(project_id: str, run_id: str):
+    if not store.project_exists(project_id):
+        raise HTTPException(status_code=404, detail=f"项目不存在: {project_id}")
+
+    runs = store.load_ai_runs(project_id)
+    next_runs = [run for run in runs if run.get("id") != run_id]
+    if len(next_runs) == len(runs):
+        raise HTTPException(status_code=404, detail=f"AI 调用记录不存在: {run_id}")
+
+    store.save_ai_runs(project_id, next_runs)
+    return {"message": "AI 调用记录删除成功", "run_id": run_id}
 
 
 @router.post("/{project_id}/ai/prepare")

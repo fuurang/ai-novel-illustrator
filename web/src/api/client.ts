@@ -84,6 +84,29 @@ export const api = {
     status: (projectId: string) =>
       new EventSource(`${API_BASE}/projects/${projectId}/pipeline/status`),
   },
+  autoIllustration: {
+    start: (projectId: string, data: any) =>
+      request<any>(`/projects/${projectId}/auto-illustration/start`, {
+        method: 'POST',
+        body: JSON.stringify(data || {}),
+      }),
+    pause: (projectId: string) =>
+      request<any>(`/projects/${projectId}/auto-illustration/pause`, {
+        method: 'POST',
+      }),
+    resume: (projectId: string) =>
+      request<any>(`/projects/${projectId}/auto-illustration/resume`, {
+        method: 'POST',
+      }),
+    stop: (projectId: string) =>
+      request<any>(`/projects/${projectId}/auto-illustration/stop`, {
+        method: 'POST',
+      }),
+    status: (projectId: string) =>
+      request<any>(`/projects/${projectId}/auto-illustration/status`),
+    events: (projectId: string) =>
+      new EventSource(`${API_BASE}/projects/${projectId}/auto-illustration/events`),
+  },
   chapters: {
     list: async (projectId: string, chapter?: number) => {
       const params = chapter !== undefined ? `?chapter=${chapter}` : ''
@@ -154,6 +177,10 @@ export const api = {
       request<any>(`/projects/${projectId}/ai/apply`, {
         method: 'POST',
         body: JSON.stringify({ run_id: runId }),
+      }),
+    deleteRun: (projectId: string, runId: string) =>
+      request<any>(`/projects/${projectId}/ai/runs/${runId}`, {
+        method: 'DELETE',
       }),
   },
   entities: {
