@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException
@@ -16,6 +17,7 @@ _pipeline_tasks: dict = {}
 _pipeline_status: dict = {}
 
 store = ProjectStore()
+IMAGE_STAGES = {"illustrate", "face_anchor", "character_image", "scene_image", "item_image"}
 
 
 class PipelineRequest(BaseModel):
@@ -28,22 +30,46 @@ class PipelineRequest(BaseModel):
 
 def _get_project_input_file(project_id: str) -> str:
     info = store.load_project_info(project_id)
-    input_file = info.get("input_file", "")
+    input_file = info.get("input_file") or info.get("input_path") or ""
     if not input_file:
         raise ValueError(f"项目 {project_id} 没有关联的输入文件")
+    if not Path(input_file).exists():
+        raise FileNotFoundError(f"项目输入文件不存在: {input_file}")
     return input_file
 
 
 def _parse_chapter_range(chapter_range: str) -> List[int]:
-    result = []
+    result: list[int] = []
     for part in chapter_range.split(","):
         part = part.strip()
+        if not part:
+            continue
         if "-" in part:
-            start, end = part.split("-", 1)
-            result.extend(range(int(start), int(end) + 1))
+            try:
+                start, end = [int(value.strip()) for value in part.split("-", 1)]
+            except ValueError as exc:
+                raise ValueError(f"章节范围格式无效: {part}") from exc
+            if start > end:
+                start, end = end, start
+            result.extend(range(start, end + 1))
         else:
-            result.append(int(part))
-    return result
+            try:
+                result.append(int(part))
+            except ValueError as exc:
+                raise ValueError(f"章节范围格式无效: {part}") from exc
+    return sorted(set(chapter for chapter in result if chapter > 0))
+
+
+def _validate_pipeline_request(project_id: str, request: PipelineRequest) -> None:
+    _get_project_input_file(project_id)
+    if request.chapter_range:
+        chapter_indices = _parse_chapter_range(request.chapter_range)
+        if not chapter_indices:
+            raise ValueError("章节范围不能为空")
+    if request.chapter_indices is not None:
+        invalid = [chapter for chapter in request.chapter_indices if chapter <= 0]
+        if invalid:
+            raise ValueError(f"章节编号必须为正整数: {invalid}")
 
 
 async def _run_pipeline_task(project_id: str, config: dict, request: PipelineRequest):
@@ -106,7 +132,7 @@ async def _run_pipeline_task(project_id: str, config: dict, request: PipelineReq
                 input_path=input_file,
                 output_dir="",
                 stages=[stage],
-                enable_image=stage in ("illustrate", "face_anchor", "character_image", "scene_image", "item_image") and request.enable_image,
+                enable_image=request.enable_image or stage in IMAGE_STAGES,
                 project_id=project_id,
                 project_name=store.load_project_info(project_id).get("name", ""),
                 chapter_indices=chapter_indices,
@@ -167,6 +193,11 @@ async def run_pipeline(project_id: str, request: PipelineRequest = None):
 
     if request is None:
         request = PipelineRequest()
+
+    try:
+        _validate_pipeline_request(project_id, request)
+    except (ValueError, FileNotFoundError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     config = load_config()
     if request.extraction_level:

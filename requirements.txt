@@ -12,3 +12,4 @@ chardet>=5.0
 httpx>=0.25
 pillow>=10.0
 gradio>=4.0
+pytest-asyncio>=0.23

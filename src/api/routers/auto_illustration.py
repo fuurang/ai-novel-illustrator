@@ -11,14 +11,14 @@ from pydantic import BaseModel
 
 from src.api.routers.ai_workspace import AiRunRequest, run_ai_task
 from src.api.routers.chapters import (
-    confirmed_scene_groups,
-    get_chapter_number,
     group_end_chapter,
     group_start_chapter,
+    last_chapter_number as _last_chapter_number,
     load_scene_groups,
     next_scene_start_chapter,
     parse_chapter_range,
     save_scene_groups,
+    scene_chapters as _scene_chapters,
 )
 from src.api.routers.images import _entity_image_path, _generate_single_entity_image
 from src.storage.project_store import ProjectStore
@@ -203,24 +203,6 @@ async def _with_retries(
         skipped=True,
     )
     raise RuntimeError(message)
-
-
-def _last_chapter_number(chapters: list[dict[str, Any]]) -> int:
-    if not chapters:
-        return 0
-    return max(get_chapter_number(chapter, index + 1) for index, chapter in enumerate(chapters))
-
-
-def _scene_chapters(scene: dict[str, Any]) -> set[int]:
-    chapters: set[int] = set()
-    for chapter in scene.get("chapters") or []:
-        try:
-            chapters.add(int(chapter))
-        except Exception:
-            pass
-    if not chapters:
-        chapters.update(parse_chapter_range(scene.get("chapter_range", "")))
-    return chapters
 
 
 def _entity_chapter_numbers(entity: dict[str, Any]) -> set[int]:

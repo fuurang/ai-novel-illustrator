@@ -1,11 +1,16 @@
 import { create } from 'zustand'
 import { api } from '@/api/client'
+import type { PipelineRunOptions, PipelineStatus } from '@/api/types'
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : '执行失败'
+}
 
 interface PipelineState {
   runningStage: string
   stageProgress: number
   stageMessage: string
-  runStage: (projectId: string, stage: string, chapterIndices?: number[], options?: any) => Promise<void>
+  runStage: (projectId: string, stage: string, chapterIndices?: number[], options?: PipelineRunOptions) => Promise<void>
   setStageMessage: (message: string) => void
   reset: () => void
 }
@@ -15,16 +20,16 @@ export const usePipelineStore = create<PipelineState>((set) => ({
   stageProgress: 0,
   stageMessage: '',
 
-  runStage: async (projectId: string, stage: string, chapterIndices?: number[], options?: any) => {
+  runStage: async (projectId: string, stage: string, chapterIndices?: number[], options?: PipelineRunOptions) => {
     set({ runningStage: stage, stageProgress: 0, stageMessage: `正在执行: ${stage}` })
 
     try {
       await api.pipeline.runStage(projectId, stage, chapterIndices, options)
-    } catch (e: any) {
+    } catch (error) {
       set({
         runningStage: '',
         stageProgress: 0,
-        stageMessage: e.message || '执行失败',
+        stageMessage: getErrorMessage(error),
       })
       return
     }
@@ -33,7 +38,7 @@ export const usePipelineStore = create<PipelineState>((set) => ({
 
     source.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data)
+        const data = JSON.parse(event.data) as PipelineStatus
         const isDone = !data.is_running || data.current_stage_key === 'done' || data.current_stage_key === 'error'
 
         set({
@@ -45,7 +50,9 @@ export const usePipelineStore = create<PipelineState>((set) => ({
         if (isDone) {
           source.close()
         }
-      } catch {}
+      } catch (error) {
+        void error
+      }
     }
 
     source.onerror = () => {

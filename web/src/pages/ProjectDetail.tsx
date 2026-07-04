@@ -29,6 +29,8 @@ import WorldBibleView from '@/components/WorldBibleView'
 import AiWorkspace from '@/components/AiWorkspace'
 import WorkflowGuide from '@/components/WorkflowGuide'
 import { cn } from '@/lib/utils'
+import { entityInScene } from '@/lib/entityFilters'
+import { savedGalleryImagesFromEntities } from '@/lib/galleryImages'
 
 type TabKey = 'world' | 'ai' | 'content' | 'entities' | 'gallery'
 
@@ -52,71 +54,6 @@ const entityViewModes: { key: EntityViewMode; label: string; icon: typeof Grid2X
   { key: 'large', label: '大卡片', icon: Grid2X2 },
   { key: 'details', label: '详细信息', icon: List },
 ]
-
-const parseChapterRange = (value: string) => {
-  const chapters: number[] = []
-  String(value || '').split(',').forEach((part) => {
-    const trimmed = part.trim()
-    if (!trimmed) return
-    const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/)
-    if (range) {
-      const start = Number(range[1])
-      const end = Number(range[2])
-      for (let chapter = start; chapter <= end; chapter += 1) chapters.push(chapter)
-      return
-    }
-    const single = Number(trimmed)
-    if (Number.isFinite(single)) chapters.push(single)
-  })
-  return chapters
-}
-
-const entityChapterNumbers = (entity: any) => {
-  const chapters = new Set<number>()
-  const add = (value: any) => {
-    const num = Number(value)
-    if (Number.isFinite(num) && num > 0) chapters.add(num)
-  }
-
-  ;(entity.source_quotes || []).forEach((item: any) => {
-    add(typeof item === 'number' ? item : item?.chapter)
-  })
-  ;(entity.chapter_appearances || []).forEach((item: any) => {
-    add(typeof item === 'number' ? item : item?.chapter)
-  })
-  ;(entity.source_chapters || []).forEach(add)
-  add(entity.first_appearance_chapter)
-  parseChapterRange(entity.chapter_range || '').forEach(add)
-
-  return chapters
-}
-
-const entityInScene = (entity: any, scene: any) => {
-  const sceneChapters = new Set(
-    (scene?.chapters || [])
-      .map((chapter: any) => Number(chapter))
-      .filter((chapter: number) => Number.isFinite(chapter))
-  )
-  if (!sceneChapters.size) {
-    parseChapterRange(scene?.chapter_range || '').forEach((chapter) => sceneChapters.add(chapter))
-  }
-  if (!sceneChapters.size) return true
-  const chapters = entityChapterNumbers(entity)
-  if (!chapters.size) return false
-  return [...chapters].some((chapter) => sceneChapters.has(chapter))
-}
-
-const savedGalleryImagesFromEntities = (entities: any[]) =>
-  entities
-    .filter((entity) => entity.image_locked && (entity.locked_image_url || entity.image_url))
-    .map((entity) => ({
-      id: entity.id,
-      url: entity.locked_image_url || entity.image_url,
-      path: entity.locked_image_url || entity.image_url,
-      name: entity.name || '已保存图片',
-      entity_name: entity.name,
-      entity_id: entity.id,
-    }))
 
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>()

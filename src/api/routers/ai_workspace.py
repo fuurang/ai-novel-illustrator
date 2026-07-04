@@ -13,6 +13,24 @@ from src.llm.adapter import LLMAdapter
 from src.llm.prompt_loader import PromptLoader
 from src.core.entity_extractor import EntityExtractor
 from src.core.entity_merger import EntityMerger
+from src.core.scene_groups import (
+    SCENE_GRANULARITY,  # noqa: F401 - compatibility alias
+    SCENE_SEGMENT_BATCH_CHAPTERS,
+    SCENE_SEGMENT_MAX_INTERNAL_ROUNDS,
+    chapter_context as _chapter_context,
+    chapters_from as _chapters_from,
+    confirmed_scene_groups as _confirmed_scene_groups,
+    get_chapter_number as _chapter_number,
+    group_end_chapter as _scene_group_end_chapter,  # noqa: F401 - compatibility alias
+    group_start_chapter as _scene_group_start_chapter,  # noqa: F401 - compatibility alias
+    last_chapter_number as _last_chapter_number,
+    load_scene_groups as _core_load_scene_groups,
+    next_scene_start_chapter as _next_scene_start_chapter,
+    parse_chapter_range as _parse_chapter_range,  # noqa: F401 - compatibility alias
+    save_scene_groups as _core_save_scene_groups,
+    scene_granularity_config as _scene_granularity_config,
+    slice_chapter_batch as _slice_chapter_batch,
+)
 from src.models.chapter import Chapter
 from src.models.entity import Entity
 from src.models.prompt import Prompt, PromptParameters
@@ -34,26 +52,6 @@ class AiPrepareRequest(BaseModel):
     extra_instruction: str = ""
     attachment_refs: List[str] = []
     followup_run_id: Optional[str] = None
-
-
-SCENE_GRANULARITY = {
-    "fine": {
-        "label": "细",
-        "instruction": "细粒度：倾向于把地点、目标、冲突或时间状态稍有明显变化的段落拆开；允许只分 1-3 章，适合城市探索、楼层推进、副本小关卡。",
-    },
-    "medium": {
-        "label": "中",
-        "instruction": "中粒度：按主要剧情阶段分段；只有主要空间、行动目标、危险来源或阶段状态明显变化时才切换。",
-    },
-    "coarse": {
-        "label": "粗",
-        "instruction": "粗粒度：倾向于合并同一大地图/大副本/长行动线中的连续章节；只有进入新的大地图、新副本、新长期目标或世界规则变化时才切换。",
-    },
-}
-
-
-def _scene_granularity_config(granularity: str, max_chapters: int | None = None) -> Dict[str, Any]:
-    return dict(SCENE_GRANULARITY.get(granularity, SCENE_GRANULARITY["medium"]))
 
 
 class AiRunRequest(AiPrepareRequest):
@@ -144,8 +142,6 @@ TASKS = [
 ]
 
 ATTACHMENT_LIMIT_CHARS = 30000
-SCENE_SEGMENT_BATCH_CHAPTERS = 12
-SCENE_SEGMENT_MAX_INTERNAL_ROUNDS = 20
 
 
 def _get_prompt_loader() -> PromptLoader:
@@ -156,123 +152,12 @@ def _get_llm() -> LLMAdapter:
     return LLMAdapter(load_config())
 
 
-def _chapter_number(chapter: dict, fallback: int = 0) -> int:
-    return int(chapter.get("number", chapter.get("chapter_number", chapter.get("index", fallback))) or fallback)
-
-
-def _parse_chapter_range(range_str: str) -> List[int]:
-    chapters: List[int] = []
-    if not range_str:
-        return chapters
-
-    for part in range_str.split(","):
-        part = part.strip()
-        if "-" in part:
-            try:
-                start, end = [int(value.strip()) for value in part.split("-", 1)]
-                chapters.extend(range(start, end + 1))
-            except Exception:
-                continue
-        else:
-            try:
-                chapters.append(int(part))
-            except Exception:
-                continue
-
-    return sorted(set(chapters))
-
-
-def _scene_group_end_chapter(group: dict) -> int:
-    chapters = group.get("chapters") or []
-    if chapters:
-        try:
-            return max(int(chapter) for chapter in chapters)
-        except Exception:
-            pass
-
-    parsed = _parse_chapter_range(group.get("chapter_range", ""))
-    return max(parsed) if parsed else 0
-
-
-def _scene_group_start_chapter(group: dict) -> int:
-    chapters = group.get("chapters") or []
-    if chapters:
-        try:
-            return min(int(chapter) for chapter in chapters)
-        except Exception:
-            pass
-
-    parsed = _parse_chapter_range(group.get("chapter_range", ""))
-    return min(parsed) if parsed else 0
-
-
-def _confirmed_scene_groups(groups: List[dict]) -> List[dict]:
-    return [
-        group for group in groups
-        if not group.get("source") or group.get("source") in {"ai", "manual"}
-    ]
-
-
-def _last_chapter_number(chapters: List[dict]) -> int:
-    chapter_numbers = [_chapter_number(chapter, index + 1) for index, chapter in enumerate(chapters)]
-    return max(chapter_numbers) if chapter_numbers else 0
-
-
-def _chapters_from(chapters: List[dict], start_chapter: int) -> List[dict]:
-    return [
-        chapter for chapter in chapters
-        if _chapter_number(chapter) >= start_chapter
-    ]
-
-
-def _chapter_context(chapters: List[dict]) -> List[Dict[str, Any]]:
-    return [
-        {
-            "number": _chapter_number(chapter, index + 1),
-            "title": chapter.get("title", f"第{index + 1}章"),
-            "text": chapter.get("text", ""),
-        }
-        for index, chapter in enumerate(chapters)
-    ]
-
-
-def _slice_chapter_batch(chapters: List[dict], offset: int) -> List[dict]:
-    return chapters[offset:offset + SCENE_SEGMENT_BATCH_CHAPTERS]
-
-
 def _load_scene_groups(project_id: str) -> List[Dict[str, Any]]:
-    groups_file = store.get_project_dir(project_id) / "scene_groups.json"
-    if not groups_file.exists():
-        return []
-    try:
-        with open(groups_file, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
+    return _core_load_scene_groups(project_id, store)
 
 
 def _save_scene_groups(project_id: str, groups: List[Dict[str, Any]]) -> None:
-    groups_file = store.get_project_dir(project_id) / "scene_groups.json"
-    with open(groups_file, "w", encoding="utf-8") as f:
-        json.dump(groups, f, ensure_ascii=False, indent=2)
-
-
-def _next_scene_start_chapter(chapters: List[dict], groups: List[dict]) -> int:
-    chapter_numbers = sorted(_chapter_number(chapter, index + 1) for index, chapter in enumerate(chapters))
-    if not chapter_numbers:
-        return 1
-
-    cursor = chapter_numbers[0]
-    confirmed_groups = _confirmed_scene_groups(groups)
-    for group in sorted(confirmed_groups, key=_scene_group_start_chapter):
-        start = _scene_group_start_chapter(group)
-        end = _scene_group_end_chapter(group)
-        if start <= cursor <= end:
-            cursor = end + 1
-        elif start > cursor:
-            break
-
-    return cursor
+    _core_save_scene_groups(project_id, groups, store)
 
 
 def _find_chapter(project_id: str, chapter_number: Optional[int]) -> dict:

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, Bot, CheckCircle, Eye, FileText, Layers, Loader2, MessageSquare, Play, RefreshCw, RotateCcw, X } from 'lucide-react'
 import { api } from '@/api/client'
+import { extractionLevels, sceneGranularityLevels } from '@/lib/workflowOptions'
 
 interface AiWorkspaceProps {
   projectId: string
@@ -31,18 +32,6 @@ const taskDefaults: Record<string, { needsEntity?: boolean; applyable?: boolean 
   world_bible_analyze: { applyable: true },
   visual_anchoring: { applyable: true },
 }
-
-const extractionLevels = [
-  { key: 'all', label: '全部' },
-  { key: 'balanced', label: '适中' },
-  { key: 'key', label: '关键' },
-]
-
-const sceneGranularityLevels = [
-  { key: 'fine', label: '细', desc: '小地图/小事件，边界变化稍明显就切换' },
-  { key: 'medium', label: '中', desc: '按主要剧情阶段切换' },
-  { key: 'coarse', label: '粗', desc: '大地图/副本/长行动线尽量合并' },
-]
 
 function JsonBlock({ value }: { value: unknown }) {
   return (

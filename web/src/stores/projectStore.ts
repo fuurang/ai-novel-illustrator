@@ -1,19 +1,6 @@
 import { create } from 'zustand'
 import { api } from '@/api/client'
-
-interface Project {
-  id: string
-  name: string
-  novel_name: string
-  status: 'idle' | 'running' | 'completed' | 'error'
-  created_at: string
-  stats: {
-    characters: number
-    scenes: number
-    items: number
-    images: number
-  }
-}
+import type { Project } from '@/api/types'
 
 interface ProjectState {
   projects: Project[]
@@ -72,7 +59,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         currentProject:
           state.currentProject?.id === id ? null : state.currentProject,
       }))
-    } catch {}
+    } catch (error) {
+      void error
+    }
   },
 }))
 

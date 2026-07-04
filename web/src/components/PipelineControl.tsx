@@ -3,6 +3,15 @@ import { usePipelineStore } from '@/stores/pipelineStore'
 import { useProjectStore } from '@/stores/projectStore'
 import { useState, useEffect, useRef } from 'react'
 import { api } from '@/api/client'
+import type {
+  AutoIllustrationFailedStep,
+  AutoIllustrationPhase,
+  AutoIllustrationStatus,
+  AutoIllustrationStatusValue,
+  SceneGroup,
+} from '@/api/types'
+import { entityInScene, hasVisualAttributes, taskPrefixForEntity } from '@/lib/entityFilters'
+import { extractionLevels, sceneGranularityLevels } from '@/lib/workflowOptions'
 
 const stages = [
   { key: 'preprocess', label: '整理原文', desc: '拆分章节、清洗文本', needChapter: false },
@@ -13,27 +22,7 @@ const stages = [
   { key: 'prompt', label: '生成绘图指令', desc: '生成可发给生图 API 的指令', needChapter: true },
 ]
 
-const extractionLevels = [
-  { key: 'all', label: '全部' },
-  { key: 'balanced', label: '适中' },
-  { key: 'key', label: '关键' },
-]
-
-const sceneGranularityLevels = [
-  { key: 'fine', label: '细', desc: '小地图/小事件，边界变化稍明显就切换' },
-  { key: 'medium', label: '中', desc: '按主要剧情阶段切换' },
-  { key: 'coarse', label: '粗', desc: '大地图/副本/长行动线尽量合并' },
-]
-
-interface SceneSuggestion {
-  id: string
-  name: string
-  chapter_range: string
-  chapters: number[]
-  description: string
-  confidence?: number
-  reasoning?: string
-}
+type SceneSuggestion = SceneGroup
 
 const isConfirmedScene = (group: any) => !group?.source || group.source === 'ai' || group.source === 'manual'
 
@@ -80,107 +69,13 @@ interface PipelineControlProps {
   onSelectedSceneChange?: (scene: any | null) => void
 }
 
-const parseChapterRange = (value: string) => {
-  const chapters: number[] = []
-  String(value || '').split(',').forEach((part) => {
-    const trimmed = part.trim()
-    if (!trimmed) return
-    const range = trimmed.match(/^(\d+)\s*-\s*(\d+)$/)
-    if (range) {
-      const start = Number(range[1])
-      const end = Number(range[2])
-      for (let chapter = start; chapter <= end; chapter += 1) chapters.push(chapter)
-      return
-    }
-    const single = Number(trimmed)
-    if (Number.isFinite(single)) chapters.push(single)
-  })
-  return chapters
-}
-
-const entityChapterNumbers = (entity: any) => {
-  const chapters = new Set<number>()
-  const add = (value: any) => {
-    const num = Number(value)
-    if (Number.isFinite(num) && num > 0) chapters.add(num)
-  }
-
-  ;(entity.source_quotes || []).forEach((item: any) => {
-    add(typeof item === 'number' ? item : item?.chapter)
-  })
-  ;(entity.chapter_appearances || []).forEach((item: any) => {
-    add(typeof item === 'number' ? item : item?.chapter)
-  })
-  ;(entity.source_chapters || []).forEach(add)
-  add(entity.first_appearance_chapter)
-  parseChapterRange(entity.chapter_range || '').forEach(add)
-
-  return chapters
-}
-
-const entityInScene = (entity: any, scene: any) => {
-  const sceneChapters = new Set(
-    (scene?.chapters || []).map((chapter: any) => Number(chapter)).filter((chapter: number) => Number.isFinite(chapter))
-  )
-  if (!sceneChapters.size) {
-    parseChapterRange(scene?.chapter_range || '').forEach((chapter) => sceneChapters.add(chapter))
-  }
-  if (!sceneChapters.size) return true
-  const chapters = entityChapterNumbers(entity)
-  if (!chapters.size) return false
-  return [...chapters].some((chapter) => sceneChapters.has(chapter))
-}
-
-const hasVisualAttributes = (entity: any) => {
-  const attrs = entity?.attributes
-  if (!attrs || typeof attrs !== 'object') return false
-  return JSON.stringify(attrs).replace(/[{}[\]":,\s]/g, '').length > 8
-}
-
-const taskPrefixForEntity = (entity: any) => {
-  if (entity.type === 'scene') return 'scene'
-  if (entity.type === 'item') return 'item'
-  return 'character'
-}
-
 type AutoWorkflowPhase = 'extract' | 'attribute' | 'prompt' | 'image' | 'done'
 type AutoWorkflowStatus = 'running' | 'paused' | 'failed' | 'completed'
 
-type BookAutoStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed' | 'stopped'
-type BookAutoPhase = 'segment' | 'extract' | 'attribute' | 'prompt' | 'image' | 'skip' | 'done'
-
-interface BookAutoFailedStep {
-  id?: string
-  phase?: string
-  step?: string
-  message?: string
-  attempts?: number
-  skipped?: boolean
-  scene_name?: string
-  entity_name?: string
-  created_at?: string
-}
-
-interface BookAutoState {
-  status: BookAutoStatus
-  scene_granularity: string
-  extraction_level: string
-  skip_locked?: boolean
-  current_scene_id?: string
-  current_scene_name?: string
-  current_phase: BookAutoPhase
-  current_chapter: number
-  last_completed_chapter: number
-  total_chapters: number
-  completed_scene_ids: string[]
-  skipped_scene_ids: string[]
-  failed_steps: BookAutoFailedStep[]
-  pause_requested?: boolean
-  stop_requested?: boolean
-  message: string
-  progress: number
-  updated_at?: string
-}
+type BookAutoStatus = AutoIllustrationStatusValue
+type BookAutoPhase = AutoIllustrationPhase
+type BookAutoFailedStep = AutoIllustrationFailedStep
+type BookAutoState = AutoIllustrationStatus
 
 interface AutoWorkflowCheckpoint {
   projectId: string

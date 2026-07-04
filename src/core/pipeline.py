@@ -58,6 +58,8 @@ class PipelineContext:
     prompts: List[Prompt] = field(default_factory=list)
     stage_results: Dict[str, StageResult] = field(default_factory=dict)
     processed_chapters: set = field(default_factory=set)
+    # Transient extraction output consumed by merge; persisted only after merging.
+    pending_candidates: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class Pipeline:
@@ -213,7 +215,7 @@ class Pipeline:
         self._init_components()
 
         if stages is None:
-            stages = ["preprocess", "world_bible", "extract", "merge", "prompt"]
+            stages = ["preprocess", "world_bible", "extract", "merge", "attribute", "prompt"]
             if enable_image:
                 stages.append("illustrate")
 
@@ -581,10 +583,10 @@ class Pipeline:
 
             console.print(f"[green]✓[/green] 实体提取完成: {len(all_candidates)} 个候选实体")
 
-            if all_candidates and context._components.get("_pending_candidates"):
-                context._components["_pending_candidates"].extend(all_candidates)
+            if all_candidates and context.pending_candidates:
+                context.pending_candidates.extend(all_candidates)
             else:
-                context._components["_pending_candidates"] = all_candidates
+                context.pending_candidates = all_candidates
 
             return context
 
@@ -612,7 +614,7 @@ class Pipeline:
             return context
 
         try:
-            pending_candidates = context._components.get("_pending_candidates", [])
+            pending_candidates = context.pending_candidates
 
             if not pending_candidates:
                 console.print("[yellow]![/yellow] 没有待合并的候选实体")
@@ -625,7 +627,7 @@ class Pipeline:
             )
 
             context.entities = merged_entities
-            context._components["_pending_candidates"] = []
+            context.pending_candidates = []
 
             self.project_store.save_entities(
                 context.project.id,
@@ -900,7 +902,10 @@ class Pipeline:
         if not context.entities:
             context.entities = [Entity(**entity) for entity in self.project_store.load_entities(context.project.id)]
         if context.world_bible is None:
-            context.world_bible = WorldBible(**self.project_store.load_world_bible(context.project.id))
+            try:
+                context.world_bible = WorldBible(**self.project_store.load_world_bible(context.project.id))
+            except FileNotFoundError:
+                context.world_bible = WorldBible(project_id=context.project.id)
 
         images_dir = get_project_images_dir(context.project.id)
         prompts = {prompt.entity_id: prompt for prompt in context.prompts if prompt.type == "character"}

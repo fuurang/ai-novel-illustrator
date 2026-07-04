@@ -21,6 +21,42 @@ from src.models.world_bible import WorldBible, WorldFramework, VisualAnchoring, 
 from src.models.prompt import Prompt, PromptParameters
 from src.storage.project_store import ProjectStore
 from src.api.routers.chapters import next_scene_start_chapter
+from src.api.routers import pipeline as pipeline_router
+from fastapi import HTTPException
+
+
+def _record_stage(order, name):
+    async def _stage(context, *args, **kwargs):
+        order.append(name)
+        return context
+
+    return _stage
+
+
+def _attach_recording_stages(pipeline, order):
+    for name in (
+        "preprocess",
+        "world_bible",
+        "extract",
+        "merge",
+        "attribute",
+        "prompt",
+        "illustrate",
+    ):
+        setattr(pipeline, f"_stage_{name}", _record_stage(order, name))
+
+
+def _write_project_input(store, project_id, filename="book.txt"):
+    project_dir = store.get_project_dir(project_id)
+    input_file = project_dir / "data" / filename
+    input_file.parent.mkdir(parents=True, exist_ok=True)
+    input_file.write_text("第一章\n正文", encoding="utf-8")
+
+    info_file = project_dir / "project.json"
+    info = json.loads(info_file.read_text(encoding="utf-8"))
+    info["input_file"] = str(input_file)
+    info_file.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+    return input_file
 
 
 class TestPipelineContext:
@@ -49,6 +85,7 @@ class TestPipelineContext:
         assert context.text == ""
         assert context.world_bible is None
         assert len(context.processed_chapters) == 0
+        assert context.pending_candidates == []
 
 
 class TestStageResult:
@@ -108,6 +145,259 @@ class TestPipelineCreation:
 
         assert pipeline.config == {}
         assert pipeline.project_store is not None
+
+
+class TestPipelineStages:
+    @pytest.mark.asyncio
+    async def test_default_stages_include_attribute_before_prompt(self, tmp_path):
+        order = []
+        store = ProjectStore(base_dir=str(tmp_path))
+        pipeline = Pipeline(config={}, project_store=store)
+        pipeline.api_mode = True
+        pipeline._init_components = Mock()
+        _attach_recording_stages(pipeline, order)
+
+        await pipeline.run(
+            input_path="book.txt",
+            project_id="default_stages",
+            project_name="Book",
+        )
+
+        assert order == [
+            "preprocess",
+            "world_bible",
+            "extract",
+            "merge",
+            "attribute",
+            "prompt",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_default_stages_append_illustrate_when_image_enabled(self, tmp_path):
+        order = []
+        store = ProjectStore(base_dir=str(tmp_path))
+        pipeline = Pipeline(config={}, project_store=store)
+        pipeline.api_mode = True
+        pipeline._init_components = Mock()
+        _attach_recording_stages(pipeline, order)
+
+        await pipeline.run(
+            input_path="book.txt",
+            project_id="default_image_stages",
+            project_name="Book",
+            enable_image=True,
+        )
+
+        assert order == [
+            "preprocess",
+            "world_bible",
+            "extract",
+            "merge",
+            "attribute",
+            "prompt",
+            "illustrate",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_explicit_stages_are_not_expanded(self, tmp_path):
+        order = []
+        store = ProjectStore(base_dir=str(tmp_path))
+        pipeline = Pipeline(config={}, project_store=store)
+        pipeline.api_mode = True
+        pipeline._init_components = Mock()
+        _attach_recording_stages(pipeline, order)
+
+        await pipeline.run(
+            input_path="book.txt",
+            project_id="explicit_stages",
+            project_name="Book",
+            stages=["preprocess", "prompt"],
+            enable_image=True,
+        )
+
+        assert order == ["preprocess", "prompt"]
+
+    @pytest.mark.asyncio
+    async def test_extract_and_merge_use_context_pending_candidates(self, tmp_path):
+        store = ProjectStore(base_dir=str(tmp_path))
+        store.create_project("candidate_flow", "Candidate Flow")
+        pipeline = Pipeline(
+            config={"extraction": {"max_chapters_parallel": 1}},
+            project_store=store,
+        )
+        pipeline._entity_extractor = Mock()
+        pipeline._entity_extractor.extract_from_chapter = AsyncMock(
+            side_effect=[
+                [{"name": "Alice", "type": "character", "chapter": 1}],
+                [{"name": "Forest", "type": "scene", "chapter": 2}],
+            ]
+        )
+        pipeline._entity_merger = Mock()
+        merged_entities = [
+            Entity(
+                id="character_alice",
+                project_id="candidate_flow",
+                name="Alice",
+                type=EntityType.CHARACTER,
+            )
+        ]
+        pipeline._entity_merger.merge.return_value = merged_entities
+        context = PipelineContext(project=Project(id="candidate_flow"))
+        context.world_bible = WorldBible(project_id="candidate_flow")
+        context.chapters = [
+            Chapter(id="chapter_1", project_id="candidate_flow", number=1, text="one"),
+            Chapter(id="chapter_2", project_id="candidate_flow", number=2, text="two"),
+        ]
+
+        await pipeline._stage_extract(context)
+
+        candidates = list(context.pending_candidates)
+        assert candidates == [
+            {"name": "Alice", "type": "character", "chapter": 1},
+            {"name": "Forest", "type": "scene", "chapter": 2},
+        ]
+        assert context.processed_chapters == {"chapter_1", "chapter_2"}
+        assert context.stage_results["extract"].data == {"candidates": 2}
+
+        await pipeline._stage_merge(context)
+
+        pipeline._entity_merger.merge.assert_called_once_with(
+            candidates=candidates,
+            existing=[],
+            project_id="candidate_flow",
+        )
+        assert context.pending_candidates == []
+        assert context.entities == merged_entities
+        assert store.load_entities("candidate_flow")[0]["name"] == "Alice"
+
+    @pytest.mark.asyncio
+    async def test_face_anchor_uses_empty_world_bible_when_missing(self, tmp_path):
+        store = ProjectStore(base_dir=str(tmp_path))
+        store.create_project("face_anchor_fallback", "Face Anchor Fallback")
+        store.save_entities("face_anchor_fallback", [
+            {
+                "id": "character_alice",
+                "project_id": "face_anchor_fallback",
+                "name": "Alice",
+                "type": "character",
+            }
+        ])
+        store.save_prompts("face_anchor_fallback", [
+            {
+                "id": "prompt_alice",
+                "entity_id": "character_alice",
+                "type": "character",
+                "chinese_prompt": "Alice",
+                "parameters": {},
+            }
+        ])
+
+        class FakeFaceAnchorGenerator:
+            async def batch_generate(self, characters, prompts, world_bible, output_dir):
+                return {
+                    "characters": [character.id for character in characters],
+                    "project_id": world_bible.project_id,
+                }
+
+        pipeline = Pipeline(config={}, project_store=store)
+        pipeline._face_anchor_generator = FakeFaceAnchorGenerator()
+        context = PipelineContext(project=Project(id="face_anchor_fallback"))
+
+        result = await pipeline._stage_face_anchor(context)
+
+        assert result == {
+            "characters": ["character_alice"],
+            "project_id": "face_anchor_fallback",
+        }
+        assert context.stage_results["face_anchor"].success is True
+
+
+class TestPipelineApiRouter:
+    def test_parse_chapter_range_tolerates_blanks_reverses_and_dedupes(self):
+        assert pipeline_router._parse_chapter_range("3, 1-2, 5-4, , 2") == [1, 2, 3, 4, 5]
+
+    def test_parse_chapter_range_rejects_invalid_parts(self):
+        with pytest.raises(ValueError, match="1-a"):
+            pipeline_router._parse_chapter_range("1-a")
+
+    @pytest.mark.asyncio
+    async def test_run_pipeline_rejects_project_without_input_file(self, tmp_path):
+        previous_store = pipeline_router.store
+        previous_tasks = pipeline_router._pipeline_tasks
+        try:
+            pipeline_router.store = ProjectStore(base_dir=str(tmp_path))
+            pipeline_router._pipeline_tasks = {}
+            pipeline_router.store.create_project("missing_input", "Missing Input")
+
+            with pytest.raises(HTTPException) as exc_info:
+                await pipeline_router.run_pipeline(
+                    "missing_input",
+                    pipeline_router.PipelineRequest(stages=["preprocess"]),
+                )
+
+            assert exc_info.value.status_code == 400
+            assert "输入文件" in str(exc_info.value.detail)
+        finally:
+            pipeline_router.store = previous_store
+            pipeline_router._pipeline_tasks = previous_tasks
+
+    @pytest.mark.asyncio
+    async def test_run_pipeline_rejects_invalid_chapter_range_before_starting_task(self, tmp_path):
+        previous_store = pipeline_router.store
+        previous_tasks = pipeline_router._pipeline_tasks
+        try:
+            pipeline_router.store = ProjectStore(base_dir=str(tmp_path))
+            pipeline_router._pipeline_tasks = {}
+            pipeline_router.store.create_project("bad_range", "Bad Range")
+            _write_project_input(pipeline_router.store, "bad_range")
+
+            with pytest.raises(HTTPException) as exc_info:
+                await pipeline_router.run_pipeline(
+                    "bad_range",
+                    pipeline_router.PipelineRequest(stages=["extract"], chapter_range="1-a"),
+                )
+
+            assert exc_info.value.status_code == 400
+            assert "1-a" in str(exc_info.value.detail)
+            assert "bad_range" not in pipeline_router._pipeline_tasks
+        finally:
+            pipeline_router.store = previous_store
+            pipeline_router._pipeline_tasks = previous_tasks
+
+    @pytest.mark.asyncio
+    async def test_explicit_image_stage_runs_without_global_enable_image_flag(self, tmp_path, monkeypatch):
+        previous_store = pipeline_router.store
+        previous_tasks = pipeline_router._pipeline_tasks
+        calls = []
+
+        class FakePipeline:
+            def __init__(self, config, store):
+                self.api_mode = False
+
+            async def run(self, **kwargs):
+                calls.append(kwargs)
+                context = PipelineContext(project=Project(id=kwargs["project_id"]))
+                context.stage_results[kwargs["stages"][0]] = StageResult(kwargs["stages"][0], True)
+                return context
+
+        try:
+            pipeline_router.store = ProjectStore(base_dir=str(tmp_path))
+            pipeline_router._pipeline_tasks = {}
+            pipeline_router.store.create_project("image_stage", "Image Stage")
+            _write_project_input(pipeline_router.store, "image_stage")
+            monkeypatch.setattr(pipeline_router, "Pipeline", FakePipeline)
+
+            await pipeline_router._run_pipeline_task(
+                "image_stage",
+                {},
+                pipeline_router.PipelineRequest(stages=["face_anchor"], enable_image=False),
+            )
+
+            assert calls[0]["enable_image"] is True
+            assert pipeline_router._pipeline_status["image_stage"]["stages_completed"] == ["face_anchor"]
+        finally:
+            pipeline_router.store = previous_store
+            pipeline_router._pipeline_tasks = previous_tasks
 
 
 class TestProjectStore:
